@@ -9,21 +9,30 @@ Home-and-away scheduling for pool leagues where bars share tables and teams shar
 
 ## Turning access on/off
 
-The deployed page checks a small JSON config hosted in a GitHub Gist before letting anyone in:
+**Default link** (no `?league=` in the URL — https://tnrmktng.github.io/chalk-line-scheduler/):
+gated by one gist, same as a single-league setup.
 
-```json
-{ "open": true, "code": "chalklive" }
-```
+- **Edit the live switch:** https://gist.github.com/tnrmktng/aeb9d09be2f1c3cd30a36b2cebb90518
+- Current access code: `chalklive`
+- Set `"open": false` to take the tool offline (shows a "not open right now" screen). Change `"code"` to rotate the code. Edits take effect next page load — no redeploy needed.
 
-- Set `"open": false` to take the tool offline for everyone (shows a "not open right now" screen).
-- Change `"code"` any time to change the access code testers need to type in.
-- Edits to the gist take effect the next time someone loads the page — no redeploy needed.
+## Multiple leagues
 
-**Edit the live switch here:** https://gist.github.com/tnrmktng/aeb9d09be2f1c3cd30a36b2cebb90518
+Every league gets its own link, its own access code, and its own on/off switch, all pointing at the same deployed page — turning one league off doesn't touch any other.
 
-Current access code: `chalklive`
+**Directory gist** (maps league slug → that league's access gist): https://gist.github.com/tnrmktng/819b4978f9a682a1624d585e4ec82d7f
 
-Note: `chalk-line-access.json` in this repo is just the template used to seed the gist — editing it does nothing to the live site. Only edits made directly on the gist page above take effect.
+To onboard a new league (no code change, no redeploy):
+
+1. Create a new public gist, e.g. `chalk-line-access-<league>.json`, containing `{ "open": true, "code": "yourcode" }`. Copy its Raw URL.
+2. Add a line to the directory gist above: `"<slug>": "<that raw URL>"`.
+3. Send that league this link: `https://tnrmktng.github.io/chalk-line-scheduler/?league=<slug>`.
+
+Existing demo league for reference: `?league=demo`, code `demolive`, gist at https://gist.github.com/tnrmktng/b7513aa05c7641753dd81b22e915dd07
+
+Each league's schedule data is also kept separate automatically (stored per-link in each visitor's own browser).
+
+Note: the `chalk-line-*.json` files in this repo are just templates used to seed the gists — editing them here does nothing to the live site. Only edits made directly on the gist pages above take effect.
 
 ## Deploying changes
 

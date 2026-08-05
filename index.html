@@ -11,34 +11,36 @@
   =========================================================================
   SETUP — read this before you upload the file anywhere.
 
-  1. This app can be locked behind an access code that YOU control, without
-     re-uploading the file every time you want to turn testing on or off.
+  DEFAULT LINK (no ?league= in the URL) is gated by CONFIG_URL below —
+  one shared access code/on-off switch, same as a single-league setup.
 
-  2. To wire that up:
-     a. Go to gist.github.com (free GitHub account needed) and create a
-        new PUBLIC gist with one file, e.g. "chalk-line-access.json",
-        containing exactly this:
-             { "open": true, "code": "1234" }
-     b. Save the gist, then click the file's "Raw" button and copy that URL.
-     c. Paste it below as CONFIG_URL (replace the placeholder text).
+  MULTIPLE LEAGUES: give each league its own link, own access code, own
+  on/off switch, all pointing at this same deployed file:
 
-  3. From then on, edit that gist any time to flip access on/off
-     ("open": true or false) or change the code ("code": "..."). No need
-     to touch or re-upload this HTML file again — testers will pick up
-     the change the next time they load the page.
+  1. Create a PUBLIC gist per league, e.g. "chalk-line-access-<league>.json":
+             { "open": true, "code": "yourcode" }
+     Copy its "Raw" URL.
 
-  4. Until you set CONFIG_URL, the app runs wide open with a small notice
-     at the top, so you can preview it before locking it down.
+  2. Add that league to the LEAGUES_URL directory gist (one JSON file
+     mapping league slug -> that raw URL), e.g.:
+             { "riverside": "https://gist.githubusercontent.com/.../raw/...json" }
+
+  3. Send that league the link: this page's URL + "?league=riverside".
+     They'll be gated by their own gist — independent of every other league.
+
+  Onboarding a new league from here on is just steps 1-2 above (two gist
+  edits) — no code change or redeploy needed.
 
   Heads up: this is a light front-door, not a security system. Someone who
-  opens their browser's dev tools could find the config URL and code. It's
-  meant to keep casual link-sharing under control during testing, not to
-  protect anything sensitive.
+  opens their browser's dev tools could find the config URLs and codes. It's
+  meant to keep casual link-sharing under control during testing/trials, not
+  to protect anything sensitive.
   =========================================================================
 -->
 
 <script>
   window.CONFIG_URL = "https://gist.githubusercontent.com/tnrmktng/aeb9d09be2f1c3cd30a36b2cebb90518/raw/chalk-line-access.json";
+  window.LEAGUES_URL = "https://gist.githubusercontent.com/tnrmktng/819b4978f9a682a1624d585e4ec82d7f/raw/chalk-line-leagues.json";
 </script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
@@ -387,7 +389,7 @@ const seedTeams = [
 ];
 
 // ---------- main scheduler app ----------
-function ChalkLineScheduler() {
+function ChalkLineScheduler({ storageKey }) {
   const [bars, setBars] = useState(seedBars);
   const [teams, setTeams] = useState(seedTeams);
   const [settings, setSettings] = useState({ matchesPerWeek: 1, doubleRound: true, startDate: todayISO() });
@@ -400,7 +402,7 @@ function ChalkLineScheduler() {
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem("chalk-line-config");
+      const raw = localStorage.getItem(storageKey);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed.bars) setBars(parsed.bars);
@@ -409,7 +411,7 @@ function ChalkLineScheduler() {
         if (parsed.schedule) setSchedule(parsed.schedule);
       }
     } catch (e) { /* no saved config yet */ }
-  }, []);
+  }, [storageKey]);
 
   const barsById = useMemo(() => Object.fromEntries(bars.map((b) => [b.id, b])), [bars]);
   const teamsById = useMemo(() => Object.fromEntries(teams.map((t) => [t.id, t])), [teams]);
@@ -451,7 +453,7 @@ function ChalkLineScheduler() {
 
   const saveConfig = () => {
     try {
-      localStorage.setItem("chalk-line-config", JSON.stringify({ bars, teams, settings, schedule }));
+      localStorage.setItem(storageKey, JSON.stringify({ bars, teams, settings, schedule }));
       flash("Setup saved to this browser. It'll be here next time you open this page here.");
     } catch (e) { flash("Couldn't save right now — try again in a moment."); }
   };
@@ -630,34 +632,57 @@ function ChalkLineScheduler() {
 }
 
 // ---------- access gate wrapper ----------
+const noCacheFetch = (url) =>
+  fetch(url + (url.includes("?") ? "&" : "?") + "t=" + Date.now(), { cache: "no-store" }).then((r) => r.json());
+
 function AccessGate() {
   const [state, setState] = useState({ status: "loading" });
   const [codeInput, setCodeInput] = useState("");
   const [error, setError] = useState("");
 
-  const configured = window.CONFIG_URL && !window.CONFIG_URL.includes("PASTE_YOUR");
+  const leagueSlug = new URLSearchParams(window.location.search).get("league");
+  const accessCodeKey = "cl-access-code-" + (leagueSlug || "default");
+  const storageKey = "chalk-line-config-" + (leagueSlug || "default");
 
   useEffect(() => {
-    if (!configured) { setState({ status: "unconfigured" }); return; }
-    fetch(window.CONFIG_URL + (window.CONFIG_URL.includes("?") ? "&" : "?") + "t=" + Date.now(), { cache: "no-store" })
-      .then((r) => r.json())
-      .then((data) => {
-        const cfg = { open: !!data.open, code: String(data.code ?? "") };
-        const savedCode = sessionStorage.getItem("cl-access-code");
-        if (cfg.open && savedCode && savedCode === cfg.code) {
-          setState({ status: "in" });
-        } else if (cfg.open) {
-          setState({ status: "needs-code", code: cfg.code });
-        } else {
-          setState({ status: "closed" });
-        }
+    // No ?league= in the URL: fall back to the single legacy CONFIG_URL gate.
+    if (!leagueSlug) {
+      const configured = window.CONFIG_URL && !window.CONFIG_URL.includes("PASTE_YOUR");
+      if (!configured) { setState({ status: "unconfigured" }); return; }
+      noCacheFetch(window.CONFIG_URL)
+        .then((data) => applyConfig(data))
+        .catch(() => setState({ status: "config-error" }));
+      return;
+    }
+
+    // ?league=<slug>: look the slug up in the shared league directory, then
+    // fetch that league's own access gist.
+    const leaguesConfigured = window.LEAGUES_URL && !window.LEAGUES_URL.includes("PASTE_YOUR");
+    if (!leaguesConfigured) { setState({ status: "unconfigured" }); return; }
+    noCacheFetch(window.LEAGUES_URL)
+      .then((directory) => {
+        const leagueConfigUrl = directory[leagueSlug];
+        if (!leagueConfigUrl) { setState({ status: "unknown-league" }); return; }
+        return noCacheFetch(leagueConfigUrl).then((data) => applyConfig(data));
       })
       .catch(() => setState({ status: "config-error" }));
-  }, []);
+  }, [leagueSlug]);
+
+  const applyConfig = (data) => {
+    const cfg = { open: !!data.open, code: String(data.code ?? "") };
+    const savedCode = sessionStorage.getItem(accessCodeKey);
+    if (cfg.open && savedCode && savedCode === cfg.code) {
+      setState({ status: "in" });
+    } else if (cfg.open) {
+      setState({ status: "needs-code", code: cfg.code });
+    } else {
+      setState({ status: "closed" });
+    }
+  };
 
   const tryCode = () => {
     if (codeInput === state.code) {
-      sessionStorage.setItem("cl-access-code", codeInput);
+      sessionStorage.setItem(accessCodeKey, codeInput);
       setState({ status: "in" });
     } else {
       setError("That code didn't match. Try again.");
@@ -686,6 +711,15 @@ function AccessGate() {
       </div>
     );
   }
+  if (state.status === "unknown-league") {
+    return (
+      <div className="cl-gate">
+        <div className="cl-gate-lock"><Icon.Lock /></div>
+        <p className="cl-gate-title">Link not recognized</p>
+        <p className="cl-gate-text">This league link doesn't match anything set up yet. Double-check the link you were sent.</p>
+      </div>
+    );
+  }
   if (state.status === "needs-code") {
     return (
       <div className="cl-gate">
@@ -709,7 +743,7 @@ function AccessGate() {
           comment near the top of this file to lock it down with a code you control.
         </div>
       )}
-      <ChalkLineScheduler />
+      <ChalkLineScheduler storageKey={storageKey} />
     </div>
   );
 }
