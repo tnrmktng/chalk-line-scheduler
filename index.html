@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Chalk Line — Pool League Scheduler</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Rokkitt:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<!--
+  =========================================================================
+  SETUP — read this before you upload the file anywhere.
+
+  1. This app can be locked behind an access code that YOU control, without
+     re-uploading the file every time you want to turn testing on or off.
+
+  2. To wire that up:
+     a. Go to gist.github.com (free GitHub account needed) and create a
+        new PUBLIC gist with one file, e.g. "chalk-line-access.json",
+        containing exactly this:
+             { "open": true, "code": "1234" }
+     b. Save the gist, then click the file's "Raw" button and copy that URL.
+     c. Paste it below as CONFIG_URL (replace the placeholder text).
+
+  3. From then on, edit that gist any time to flip access on/off
+     ("open": true or false) or change the code ("code": "..."). No need
+     to touch or re-upload this HTML file again — testers will pick up
+     the change the next time they load the page.
+
+  4. Until you set CONFIG_URL, the app runs wide open with a small notice
+     at the top, so you can preview it before locking it down.
+
+  Heads up: this is a light front-door, not a security system. Someone who
+  opens their browser's dev tools could find the config URL and code. It's
+  meant to keep casual link-sharing under control during testing, not to
+  protect anything sensitive.
+  =========================================================================
+-->
+
+<script>
+  window.CONFIG_URL = "CONFIG_URL_PLACEHOLDER";
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #e9e3d3;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 28px 14px;
+  }
+  #root { width: 100%; max-width: 880px; }
+
+  .cl-app {
+    --felt: #123524;
+    --felt-deep: #0c2519;
+    --felt-light: #1d4a34;
+    --rail: #6b4226;
+    --rail-dark: #4a2d19;
+    --chalk: #4e7ac7;
+    --chalk-soft: #e7edf7;
+    --brass: #b9832f;
+    --brass-soft: #f5e9d4;
+    --paper: #faf6ee;
+    --paper-2: #f1ead9;
+    --ink: #241c12;
+    --ink-soft: #5c5142;
+    --danger: #a34433;
+    font-family: 'Inter', sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid var(--paper-2);
+    box-shadow: 0 8px 30px rgba(18,53,36,0.18);
+  }
+  .cl-header {
+    background: linear-gradient(160deg, var(--felt) 0%, var(--felt-deep) 100%);
+    color: var(--paper);
+    padding: 28px 28px 24px;
+    position: relative;
+  }
+  .cl-header::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 6px;
+    background: repeating-linear-gradient(90deg, var(--rail) 0 18px, var(--rail-dark) 18px 20px);
+  }
+  .cl-title { font-family: 'Rokkitt', serif; font-weight: 700; font-size: 28px; margin: 0; }
+  .cl-subtitle { margin: 6px 0 0; color: #cfe0d4; font-size: 14px; }
+  .cl-body { padding: 24px 28px 32px; }
+  .cl-notice {
+    background: var(--brass-soft); border: 1px solid var(--brass); color: var(--ink);
+    padding: 10px 14px; border-radius: 10px; font-size: 13.5px; margin-bottom: 18px;
+  }
+  .cl-section { margin-bottom: 26px; }
+  .cl-section-title {
+    font-family: 'Rokkitt', serif; font-size: 15px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--felt); margin-bottom: 12px;
+  }
+  .cl-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 720px) { .cl-grid-2 { grid-template-columns: 1fr; } }
+  .cl-card { background: white; border: 1px solid var(--paper-2); border-radius: 12px; padding: 14px 16px; }
+  .cl-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 0; border-bottom: 1px solid var(--paper-2); font-size: 14px;
+  }
+  .cl-row:last-child { border-bottom: none; }
+  .cl-row-main { display: flex; align-items: center; gap: 8px; }
+  .cl-tag {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; padding: 2px 7px;
+    border-radius: 5px; background: var(--paper-2); color: var(--ink-soft);
+  }
+  .cl-icon-btn {
+    border: none; background: transparent; color: var(--ink-soft); cursor: pointer;
+    padding: 4px 8px; border-radius: 6px; font-size: 14px;
+  }
+  .cl-icon-btn:hover { background: var(--paper-2); color: var(--danger); }
+  .cl-form-row { display: flex; gap: 8px; margin-top: 10px; }
+  .cl-input, .cl-select {
+    font-family: 'Inter', sans-serif; font-size: 13.5px; padding: 8px 10px;
+    border: 1px solid #d9d0bd; border-radius: 8px; background: var(--paper); color: var(--ink);
+  }
+  .cl-input:focus, .cl-select:focus, button:focus-visible { outline: 2px solid var(--chalk); outline-offset: 1px; }
+  .cl-input-name { flex: 1; min-width: 0; }
+  .cl-input-num { width: 64px; }
+  .cl-btn {
+    font-family: 'Inter', sans-serif; font-weight: 600; font-size: 13.5px; padding: 8px 14px;
+    border-radius: 8px; border: none; cursor: pointer; display: inline-flex; align-items: center;
+    gap: 6px; white-space: nowrap;
+  }
+  .cl-btn-brass { background: var(--brass); color: white; }
+  .cl-btn-brass:hover { background: #a3762a; }
+  .cl-btn-ghost { background: white; color: var(--felt); border: 1px solid var(--felt); }
+  .cl-btn-ghost:hover { background: var(--felt); color: white; }
+  .cl-actions {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 22px 0;
+    padding: 16px; background: var(--felt); border-radius: 12px;
+  }
+  .cl-settings-row { display: flex; flex-wrap: wrap; gap: 22px; font-size: 13.5px; }
+  .cl-settings-group { display: flex; flex-direction: column; gap: 6px; }
+  .cl-settings-label {
+    font-weight: 600; color: var(--ink-soft); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .cl-radio-set { display: flex; gap: 14px; }
+  .cl-radio-opt { display: flex; align-items: center; gap: 5px; font-size: 13.5px; }
+  .cl-issues {
+    background: #f7e9e5; border: 1px solid var(--danger); border-radius: 10px; padding: 10px 14px;
+    font-size: 13px; color: var(--danger); margin-bottom: 16px;
+  }
+  .cl-week { margin-bottom: 18px; border: 1px solid var(--paper-2); border-radius: 12px; overflow: hidden; }
+  .cl-week-head { background: var(--paper-2); padding: 9px 16px; font-family: 'Rokkitt', serif; font-weight: 600; font-size: 14px; color: var(--felt); }
+  .cl-night { padding: 12px 16px; border-top: 1px solid var(--paper-2); }
+  .cl-night:first-child { border-top: none; }
+  .cl-night-date { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft); margin-bottom: 8px; }
+  .cl-match { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 14px; flex-wrap: wrap; }
+  .cl-side { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+  .cl-venue { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft); margin-left: auto; }
+  .cl-badge-home { background: var(--chalk-soft); color: var(--chalk); font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.04em; }
+  .cl-badge-away { background: var(--brass-soft); color: var(--brass); font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.04em; }
+  .cl-vs { color: var(--ink-soft); font-size: 12px; }
+  .cl-bye { font-size: 12.5px; color: var(--ink-soft); font-style: italic; margin-top: 4px; }
+  .cl-dots { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--paper-2); }
+  .cl-dot-group { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ink-soft); }
+  .cl-dot-icons { display: flex; gap: 3px; }
+  .cl-dot { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--chalk); display: inline-block; }
+  .cl-summary-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .cl-summary-table th {
+    text-align: left; font-family: 'Rokkitt', serif; font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--ink-soft); padding: 6px 10px; border-bottom: 2px solid var(--paper-2);
+  }
+  .cl-summary-table td { padding: 7px 10px; border-bottom: 1px solid var(--paper-2); }
+  .cl-empty { text-align: center; padding: 30px 16px; color: var(--ink-soft); font-size: 13.5px; }
+
+  /* --- access gate --- */
+  .cl-gate {
+    font-family: 'Inter', sans-serif; background: var(--felt); color: var(--paper);
+    border-radius: 16px; padding: 48px 32px; text-align: center; max-width: 420px; margin: 60px auto;
+  }
+  .cl-gate-lock { color: var(--brass); margin-bottom: 14px; }
+  .cl-gate-title { font-family: 'Rokkitt', serif; font-size: 22px; margin: 0 0 8px; }
+  .cl-gate-text { color: #cfe0d4; font-size: 14px; margin: 0 0 20px; line-height: 1.5; }
+  .cl-gate-input {
+    width: 100%; text-align: center; letter-spacing: 0.15em; font-family: 'IBM Plex Mono', monospace;
+    font-size: 16px; padding: 12px; border-radius: 8px; border: none; margin-bottom: 12px;
+  }
+  .cl-gate-error { color: #f2b6a8; font-size: 13px; margin-bottom: 10px; }
+  .cl-gate-btn {
+    background: var(--brass); color: white; border: none; padding: 10px 20px; border-radius: 8px;
+    font-weight: 600; cursor: pointer; font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback } = React;
+
+// ---------- icons (plain SVG, no external icon library needed) ----------
+const Icon = {
+  Lock: () => (
+    <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+    </svg>
+  ),
+};
+
+// ---------- scheduling helpers ----------
+const uid = () => Math.random().toString(36).slice(2, 9);
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const addDays = (isoDate, days) => {
+  const d = new Date(isoDate + "T00:00:00");
+  d.setDate(d.getDate() + Math.round(days));
+  return d;
+};
+const formatDate = (d) => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+
+const wantsHome = (state) => {
+  const balance = state.awayCount - state.homeCount;
+  const streakBonus = state.lastVenue === "away" ? 0.5 : state.lastVenue === "home" ? -0.5 : 0;
+  return balance + streakBonus;
+};
+
+function generateRoundRobinPairs(teamIds) {
+  const hasBye = teamIds.length % 2 !== 0;
+  let arr = hasBye ? [...teamIds, null] : [...teamIds];
+  const n = arr.length;
+  const half = n / 2;
+  const rounds = [];
+  for (let r = 0; r < n - 1; r++) {
+    const pairs = [];
+    for (let i = 0; i < half; i++) {
+      const a = arr[i];
+      const b = arr[n - 1 - i];
+      if (a !== null && b !== null) pairs.push([a, b]);
+    }
+    rounds.push(pairs);
+    const fixed = arr[0];
+    const rest = arr.slice(1);
+    rest.unshift(rest.pop());
+    arr = [fixed, ...rest];
+  }
+  return rounds;
+}
+
+function backtrackAssign(freeMatches, teamsById, capacity, teamState) {
+  const cap = { ...capacity };
+  const results = new Array(freeMatches.length);
+  const tightness = (m) => (cap[teamsById[m.a].barId] ?? 0) + (cap[teamsById[m.b].barId] ?? 0);
+  const order = freeMatches.map((m, i) => ({ m, i })).sort((x, y) => tightness(x.m) - tightness(y.m));
+
+  function optionOrder(m) {
+    const scoreA = wantsHome(teamState[m.a]);
+    const scoreB = wantsHome(teamState[m.b]);
+    return scoreA >= scoreB ? [m.a, m.b] : [m.b, m.a];
+  }
+
+  function solve(pos) {
+    if (pos === order.length) return true;
+    const { m, i } = order[pos];
+    const [first, second] = optionOrder(m);
+    for (const hostId of [first, second]) {
+      const bar = teamsById[hostId].barId;
+      if ((cap[bar] ?? 0) > 0) {
+        cap[bar] -= 1;
+        results[i] = { a: m.a, b: m.b, hostId };
+        if (solve(pos + 1)) return true;
+        cap[bar] += 1;
+        results[i] = undefined;
+      }
+    }
+    return false;
+  }
+
+  const ok = solve(0);
+  if (!ok) {
+    order.forEach(({ m, i }) => {
+      if (!results[i]) {
+        const [first] = optionOrder(m);
+        results[i] = { a: m.a, b: m.b, hostId: first };
+      }
+    });
+  }
+  return { ok, matches: results };
+}
+
+function buildSchedule(teams, bars, settings) {
+  if (teams.length < 2) return { error: "Add at least two teams before generating a schedule." };
+  const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
+  const singleRounds = generateRoundRobinPairs(teams.map((t) => t.id));
+  const sequence = settings.doubleRound ? [...singleRounds, ...singleRounds] : singleRounds;
+
+  const teamState = {};
+  teams.forEach((t) => (teamState[t.id] = { homeCount: 0, awayCount: 0, lastVenue: null }));
+  const pairHistory = {};
+  const weeks = [];
+  const issues = [];
+
+  sequence.forEach((pairs, idx) => {
+    const leg = settings.doubleRound ? (idx < singleRounds.length ? 1 : 2) : 1;
+    const capacityLeft = {};
+    bars.forEach((b) => (capacityLeft[b.id] = b.tables));
+
+    const decided = [];
+    const free = [];
+    pairs.forEach(([a, b]) => {
+      const ta = teamsById[a], tb = teamsById[b];
+      const key = [a, b].sort().join("|");
+      if (leg === 2 && pairHistory[key]) {
+        const firstHost = pairHistory[key];
+        const hostId = firstHost === a ? b : a;
+        decided.push({ a, b, hostId, sharedBar: ta.barId === tb.barId });
+      } else if (ta.barId === tb.barId) {
+        decided.push({ a, b, hostId: null, sharedBar: true });
+      } else {
+        free.push({ a, b });
+      }
+    });
+
+    decided.forEach((m) => {
+      if (m.hostId) capacityLeft[teamsById[m.hostId].barId] = (capacityLeft[teamsById[m.hostId].barId] ?? 0) - 1;
+    });
+    decided.filter((m) => !m.hostId).forEach((m) => {
+      capacityLeft[teamsById[m.a].barId] = (capacityLeft[teamsById[m.a].barId] ?? 0) - 1;
+      const prefA = wantsHome(teamState[m.a]);
+      const prefB = wantsHome(teamState[m.b]);
+      m.hostId = prefA >= prefB ? m.a : m.b;
+    });
+
+    const assigned = backtrackAssign(free, teamsById, capacityLeft, teamState);
+    if (!assigned.ok) issues.push(`Round ${idx + 1}: table limits were tight — one match may need a manual swap.`);
+
+    const allMatches = [...decided, ...assigned.matches];
+    const barUsage = {};
+    bars.forEach((b) => (barUsage[b.id] = 0));
+    allMatches.forEach((m) => { barUsage[teamsById[m.hostId].barId] = (barUsage[teamsById[m.hostId].barId] ?? 0) + 1; });
+
+    allMatches.forEach((m) => {
+      const hostId = m.hostId;
+      const guestId = m.a === hostId ? m.b : m.a;
+      teamState[hostId].homeCount += 1; teamState[hostId].lastVenue = "home";
+      teamState[guestId].awayCount += 1; teamState[guestId].lastVenue = "away";
+      const key = [m.a, m.b].sort().join("|");
+      if (!pairHistory[key]) pairHistory[key] = hostId;
+    });
+
+    const involved = new Set();
+    pairs.forEach(([a, b]) => { involved.add(a); involved.add(b); });
+    const byeTeam = teams.find((t) => !involved.has(t.id));
+
+    weeks.push({
+      round: idx + 1, leg,
+      matches: allMatches.map((m) => ({
+        homeId: m.hostId, awayId: m.a === m.hostId ? m.b : m.a,
+        barId: teamsById[m.hostId].barId, sharedBar: !!m.sharedBar,
+      })),
+      byeId: byeTeam ? byeTeam.id : null,
+      barUsage,
+    });
+  });
+
+  return { weeks, teamState, issues };
+}
+
+// ---------- seed example ----------
+const seedBars = [
+  { id: "b1", name: "Corner Pocket", tables: 1 },
+  { id: "b2", name: "Rack 'Em Tavern", tables: 2 },
+  { id: "b3", name: "Side Pocket Saloon", tables: 1 },
+  { id: "b4", name: "Eight Ball Depot", tables: 1 },
+];
+const seedTeams = [
+  { id: "t1", name: "Corner Pocket A", barId: "b1" },
+  { id: "t2", name: "Corner Pocket B", barId: "b1" },
+  { id: "t3", name: "Rack 'Em Hustlers", barId: "b2" },
+  { id: "t4", name: "Rack 'Em Sharks", barId: "b2" },
+  { id: "t5", name: "Side Pocket Wolves", barId: "b3" },
+  { id: "t6", name: "Eight Ball Aces", barId: "b4" },
+];
+
+// ---------- main scheduler app ----------
+function ChalkLineScheduler() {
+  const [bars, setBars] = useState(seedBars);
+  const [teams, setTeams] = useState(seedTeams);
+  const [settings, setSettings] = useState({ matchesPerWeek: 1, doubleRound: true, startDate: todayISO() });
+  const [barName, setBarName] = useState("");
+  const [barTables, setBarTables] = useState(1);
+  const [teamName, setTeamName] = useState("");
+  const [teamBar, setTeamBar] = useState("");
+  const [schedule, setSchedule] = useState(null);
+  const [notice, setNotice] = useState(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("chalk-line-config");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.bars) setBars(parsed.bars);
+        if (parsed.teams) setTeams(parsed.teams);
+        if (parsed.settings) setSettings(parsed.settings);
+        if (parsed.schedule) setSchedule(parsed.schedule);
+      }
+    } catch (e) { /* no saved config yet */ }
+  }, []);
+
+  const barsById = useMemo(() => Object.fromEntries(bars.map((b) => [b.id, b])), [bars]);
+  const teamsById = useMemo(() => Object.fromEntries(teams.map((t) => [t.id, t])), [teams]);
+
+  const flash = (msg) => { setNotice(msg); setTimeout(() => setNotice(null), 3200); };
+
+  const addBar = () => {
+    if (!barName.trim()) return;
+    setBars((prev) => [...prev, { id: uid(), name: barName.trim(), tables: Math.max(1, Number(barTables) || 1) }]);
+    setBarName(""); setBarTables(1);
+  };
+  const removeBar = (id) => {
+    if (teams.some((t) => t.barId === id)) { flash("Move or remove that bar's teams first — a bar in use can't be deleted."); return; }
+    setBars((prev) => prev.filter((b) => b.id !== id));
+  };
+  const addTeam = () => {
+    if (!teamName.trim()) return;
+    const barId = teamBar || bars[0]?.id;
+    if (!barId) { flash("Add a bar before adding a team."); return; }
+    setTeams((prev) => [...prev, { id: uid(), name: teamName.trim(), barId }]);
+    setTeamName("");
+  };
+  const removeTeam = (id) => setTeams((prev) => prev.filter((t) => t.id !== id));
+
+  const runGenerate = useCallback((teamOrder) => {
+    const result = buildSchedule(teamOrder ?? teams, bars, settings);
+    if (result.error) { flash(result.error); setSchedule(null); return; }
+    setSchedule(result);
+  }, [teams, bars, settings]);
+
+  const shuffleAndGenerate = () => {
+    const shuffled = [...teams];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    runGenerate(shuffled);
+  };
+
+  const saveConfig = () => {
+    try {
+      localStorage.setItem("chalk-line-config", JSON.stringify({ bars, teams, settings, schedule }));
+      flash("Setup saved to this browser. It'll be here next time you open this page here.");
+    } catch (e) { flash("Couldn't save right now — try again in a moment."); }
+  };
+
+  const weeksGrouped = useMemo(() => {
+    if (!schedule) return [];
+    const perWeek = {};
+    schedule.weeks.forEach((w) => {
+      const weekIdx = Math.floor((w.round - 1) / settings.matchesPerWeek);
+      if (!perWeek[weekIdx]) perWeek[weekIdx] = [];
+      const dayOffset = (w.round - 1) * (7 / settings.matchesPerWeek);
+      perWeek[weekIdx].push({ ...w, date: addDays(settings.startDate, dayOffset) });
+    });
+    return Object.keys(perWeek).sort((a, b) => Number(a) - Number(b))
+      .map((k) => ({ weekNumber: Number(k) + 1, nights: perWeek[k] }));
+  }, [schedule, settings]);
+
+  return (
+    <div className="cl-app">
+      <div className="cl-header">
+        <p className="cl-title">Chalk Line</p>
+        <p className="cl-subtitle">Home-and-away scheduling for pool leagues where bars share tables and teams share bars.</p>
+      </div>
+      <div className="cl-body">
+        {notice && <div className="cl-notice">{notice}</div>}
+
+        <div className="cl-grid-2">
+          <div className="cl-section">
+            <div className="cl-section-title">Bars &amp; tables</div>
+            <div className="cl-card">
+              {bars.length === 0 && <div className="cl-empty">Add the bars your teams play out of.</div>}
+              {bars.map((b) => (
+                <div className="cl-row" key={b.id}>
+                  <div className="cl-row-main">
+                    <span>{b.name}</span>
+                    <span className="cl-tag">{b.tables} table{b.tables === 1 ? "" : "s"}</span>
+                  </div>
+                  <button className="cl-icon-btn" onClick={() => removeBar(b.id)}>✕</button>
+                </div>
+              ))}
+              <div className="cl-form-row">
+                <input className="cl-input cl-input-name" placeholder="Bar name" value={barName}
+                  onChange={(e) => setBarName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addBar()} />
+                <input type="number" min="1" className="cl-input cl-input-num" value={barTables}
+                  onChange={(e) => setBarTables(e.target.value)} />
+                <button className="cl-btn cl-btn-ghost" onClick={addBar}>+ Add</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="cl-section">
+            <div className="cl-section-title">Teams</div>
+            <div className="cl-card">
+              {teams.length === 0 && <div className="cl-empty">Add teams and pick which bar each one calls home.</div>}
+              {teams.map((t) => (
+                <div className="cl-row" key={t.id}>
+                  <div className="cl-row-main">
+                    <span>{t.name}</span>
+                    <span className="cl-tag">{barsById[t.barId]?.name ?? "no bar"}</span>
+                  </div>
+                  <button className="cl-icon-btn" onClick={() => removeTeam(t.id)}>✕</button>
+                </div>
+              ))}
+              <div className="cl-form-row">
+                <input className="cl-input cl-input-name" placeholder="Team name" value={teamName}
+                  onChange={(e) => setTeamName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addTeam()} />
+                <select className="cl-select" value={teamBar} onChange={(e) => setTeamBar(e.target.value)}>
+                  <option value="">Home bar…</option>
+                  {bars.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+                <button className="cl-btn cl-btn-ghost" onClick={addTeam}>+ Add</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="cl-section">
+          <div className="cl-section-title">Season settings</div>
+          <div className="cl-card cl-settings-row">
+            <div className="cl-settings-group">
+              <span className="cl-settings-label">Nights per week</span>
+              <div className="cl-radio-set">
+                <label className="cl-radio-opt"><input type="radio" checked={settings.matchesPerWeek === 1}
+                  onChange={() => setSettings((s) => ({ ...s, matchesPerWeek: 1 }))} /> Weekly</label>
+                <label className="cl-radio-opt"><input type="radio" checked={settings.matchesPerWeek === 2}
+                  onChange={() => setSettings((s) => ({ ...s, matchesPerWeek: 2 }))} /> Twice a week</label>
+              </div>
+            </div>
+            <div className="cl-settings-group">
+              <span className="cl-settings-label">Season format</span>
+              <div className="cl-radio-set">
+                <label className="cl-radio-opt"><input type="radio" checked={settings.doubleRound}
+                  onChange={() => setSettings((s) => ({ ...s, doubleRound: true }))} /> Home &amp; away (play everyone twice)</label>
+                <label className="cl-radio-opt"><input type="radio" checked={!settings.doubleRound}
+                  onChange={() => setSettings((s) => ({ ...s, doubleRound: false }))} /> Single round (once each)</label>
+              </div>
+            </div>
+            <div className="cl-settings-group">
+              <span className="cl-settings-label">First match night</span>
+              <input type="date" className="cl-input" value={settings.startDate}
+                onChange={(e) => setSettings((s) => ({ ...s, startDate: e.target.value }))} />
+            </div>
+          </div>
+        </div>
+
+        <div className="cl-actions">
+          <button className="cl-btn cl-btn-brass" onClick={() => runGenerate()}>Generate schedule</button>
+          <button className="cl-btn cl-btn-ghost" onClick={shuffleAndGenerate}>Shuffle order &amp; regenerate</button>
+          <button className="cl-btn cl-btn-ghost" onClick={saveConfig}>Save setup</button>
+        </div>
+
+        {schedule?.issues?.length > 0 && (
+          <div className="cl-issues">{schedule.issues.join(" ")}</div>
+        )}
+
+        {schedule && !schedule.error && (
+          <>
+            <div className="cl-section">
+              <div className="cl-section-title">Schedule</div>
+              {weeksGrouped.map((wk) => (
+                <div className="cl-week" key={wk.weekNumber}>
+                  <div className="cl-week-head">Week {wk.weekNumber}</div>
+                  {wk.nights.map((night) => (
+                    <div className="cl-night" key={night.round}>
+                      <div className="cl-night-date">{formatDate(night.date)} · Leg {night.leg}</div>
+                      {night.matches.map((m, i) => (
+                        <div className="cl-match" key={i}>
+                          <span className="cl-side">{teamsById[m.homeId]?.name}<span className="cl-badge-home">HOME</span></span>
+                          <span className="cl-vs">vs</span>
+                          <span className="cl-side">{teamsById[m.awayId]?.name}<span className="cl-badge-away">AWAY</span></span>
+                          <span className="cl-venue">{barsById[m.barId]?.name}{m.sharedBar ? " (shared home)" : ""}</span>
+                        </div>
+                      ))}
+                      {night.byeId && <div className="cl-bye">{teamsById[night.byeId]?.name} has the bye this round.</div>}
+                      <div className="cl-dots">
+                        {bars.filter((b) => night.barUsage[b.id] > 0).map((b) => (
+                          <div className="cl-dot-group" key={b.id}>
+                            {b.name}
+                            <span className="cl-dot-icons">
+                              {Array.from({ length: b.tables }).map((_, di) => (
+                                <span key={di} className="cl-dot" style={{ background: di < night.barUsage[b.id] ? "#4e7ac7" : "transparent" }} />
+                              ))}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+
+            <div className="cl-section">
+              <div className="cl-section-title">Home / away balance</div>
+              <div className="cl-card">
+                <table className="cl-summary-table">
+                  <thead><tr><th>Team</th><th>Home bar</th><th>Home games</th><th>Away games</th></tr></thead>
+                  <tbody>
+                    {teams.map((t) => (
+                      <tr key={t.id}>
+                        <td>{t.name}</td>
+                        <td>{barsById[t.barId]?.name}</td>
+                        <td>{schedule.teamState[t.id]?.homeCount ?? 0}</td>
+                        <td>{schedule.teamState[t.id]?.awayCount ?? 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- access gate wrapper ----------
+function AccessGate() {
+  const [state, setState] = useState({ status: "loading" });
+  const [codeInput, setCodeInput] = useState("");
+  const [error, setError] = useState("");
+
+  const configured = window.CONFIG_URL && !window.CONFIG_URL.includes("PASTE_YOUR");
+
+  useEffect(() => {
+    if (!configured) { setState({ status: "unconfigured" }); return; }
+    fetch(window.CONFIG_URL + (window.CONFIG_URL.includes("?") ? "&" : "?") + "t=" + Date.now(), { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        const cfg = { open: !!data.open, code: String(data.code ?? "") };
+        const savedCode = sessionStorage.getItem("cl-access-code");
+        if (cfg.open && savedCode && savedCode === cfg.code) {
+          setState({ status: "in" });
+        } else if (cfg.open) {
+          setState({ status: "needs-code", code: cfg.code });
+        } else {
+          setState({ status: "closed" });
+        }
+      })
+      .catch(() => setState({ status: "config-error" }));
+  }, []);
+
+  const tryCode = () => {
+    if (codeInput === state.code) {
+      sessionStorage.setItem("cl-access-code", codeInput);
+      setState({ status: "in" });
+    } else {
+      setError("That code didn't match. Try again.");
+    }
+  };
+
+  if (state.status === "loading") {
+    return <div className="cl-gate"><p className="cl-gate-text">Checking access…</p></div>;
+  }
+  if (state.status === "config-error") {
+    return (
+      <div className="cl-gate">
+        <div className="cl-gate-lock"><Icon.Lock /></div>
+        <p className="cl-gate-title">Couldn't check access</p>
+        <p className="cl-gate-text">Something went wrong reaching the access settings. Try reloading the page.</p>
+        <button className="cl-gate-btn" onClick={() => window.location.reload()}>Reload</button>
+      </div>
+    );
+  }
+  if (state.status === "closed") {
+    return (
+      <div className="cl-gate">
+        <div className="cl-gate-lock"><Icon.Lock /></div>
+        <p className="cl-gate-title">Not open right now</p>
+        <p className="cl-gate-text">This tool isn't open for testing at the moment. Check back soon.</p>
+      </div>
+    );
+  }
+  if (state.status === "needs-code") {
+    return (
+      <div className="cl-gate">
+        <div className="cl-gate-lock"><Icon.Lock /></div>
+        <p className="cl-gate-title">Enter the access code</p>
+        <p className="cl-gate-text">Ask whoever sent you this link for the current code.</p>
+        {error && <p className="cl-gate-error">{error}</p>}
+        <input className="cl-gate-input" value={codeInput} maxLength={20}
+          onChange={(e) => { setCodeInput(e.target.value); setError(""); }}
+          onKeyDown={(e) => e.key === "Enter" && tryCode()} autoFocus />
+        <div><button className="cl-gate-btn" onClick={tryCode}>Enter</button></div>
+      </div>
+    );
+  }
+  // "in" or "unconfigured"
+  return (
+    <div>
+      {state.status === "unconfigured" && (
+        <div className="cl-notice" style={{ maxWidth: 880, margin: "0 auto 16px" }}>
+          Access control isn't wired up yet — this page is open to anyone with the link. See the setup
+          comment near the top of this file to lock it down with a code you control.
+        </div>
+      )}
+      <ChalkLineScheduler />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<AccessGate />);
+</script>
+</body>
+</html>
