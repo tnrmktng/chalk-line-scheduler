@@ -19,7 +19,11 @@ The deployed page checks a small JSON config hosted in a GitHub Gist before lett
 - Change `"code"` any time to change the access code testers need to type in.
 - Edits to the gist take effect the next time someone loads the page — no redeploy needed.
 
-Edit the gist at the URL noted in the setup notes near the top of `index.html`.
+**Edit the live switch here:** https://gist.github.com/tnrmktng/aeb9d09be2f1c3cd30a36b2cebb90518
+
+Current access code: `chalklive`
+
+Note: `chalk-line-access.json` in this repo is just the template used to seed the gist — editing it does nothing to the live site. Only edits made directly on the gist page above take effect.
 
 ## Deploying changes
 
