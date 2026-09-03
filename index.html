@@ -109,6 +109,13 @@
   }
   .cl-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
   @media (max-width: 720px) { .cl-grid-2 { grid-template-columns: 1fr; } }
+  @media (max-width: 560px) {
+    .cl-match {
+      grid-template-columns: minmax(0, 1fr) 22px minmax(0, 1fr);
+      row-gap: 2px;
+    }
+    .cl-venue { grid-column: 1 / -1; text-align: left; margin-top: 2px; }
+  }
   .cl-card { background: white; border: 1px solid var(--paper-2); border-radius: 12px; padding: 14px 16px; }
   .cl-row {
     display: flex; align-items: center; justify-content: space-between;
@@ -162,11 +169,17 @@
   .cl-night { padding: 12px 16px; border-top: 1px solid var(--paper-2); }
   .cl-night:first-child { border-top: none; }
   .cl-night-date { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft); margin-bottom: 8px; }
-  .cl-match { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 14px; flex-wrap: wrap; }
-  .cl-side { display: flex; align-items: center; gap: 6px; font-weight: 600; }
-  .cl-venue { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft); margin-left: auto; }
-  .cl-badge-home { background: var(--chalk-soft); color: var(--chalk); font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.04em; }
-  .cl-badge-away { background: var(--brass-soft); color: var(--brass); font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.04em; }
+  .cl-match {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 26px minmax(0, 1fr) 150px;
+    align-items: center; gap: 8px; padding: 7px 0; font-size: 14px;
+  }
+  .cl-side { display: flex; align-items: center; gap: 6px; font-weight: 600; min-width: 0; overflow: hidden; }
+  .cl-team-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cl-match .cl-side:first-child { justify-content: flex-end; text-align: right; }
+  .cl-venue { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cl-badge-home { background: var(--chalk-soft); color: var(--chalk); font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.04em; flex-shrink: 0; }
+  .cl-badge-away { background: var(--brass-soft); color: var(--brass); font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.04em; flex-shrink: 0; }
   .cl-vs { color: var(--ink-soft); font-size: 12px; }
   .cl-bye { font-size: 12.5px; color: var(--ink-soft); font-style: italic; margin-top: 4px; }
   .cl-dots { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--paper-2); }
@@ -783,9 +796,9 @@ function ChalkLineScheduler({ storageKey }) {
                       <div className="cl-night-date">{formatDate(night.date)} · Leg {night.leg}</div>
                       {night.matches.map((m, i) => (
                         <div className="cl-match" key={i}>
-                          <span className="cl-side">{teamsById[m.homeId]?.name}<span className="cl-badge-home">HOME</span></span>
+                          <span className="cl-side"><span className="cl-team-name">{teamsById[m.homeId]?.name}</span><span className="cl-badge-home">HOME</span></span>
                           <span className="cl-vs">vs</span>
-                          <span className="cl-side">{teamsById[m.awayId]?.name}<span className="cl-badge-away">AWAY</span></span>
+                          <span className="cl-side"><span className="cl-team-name">{teamsById[m.awayId]?.name}</span><span className="cl-badge-away">AWAY</span></span>
                           <span className="cl-venue">{barsById[m.barId]?.name}{m.sharedBar ? " (shared home)" : ""}</span>
                         </div>
                       ))}
