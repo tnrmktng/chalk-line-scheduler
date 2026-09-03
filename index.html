@@ -581,10 +581,10 @@ function ChalkLineScheduler({ storageKey }) {
         if (parsed.bars) setBars(parsed.bars);
         if (parsed.teams) setTeams(parsed.teams);
         if (parsed.settings) {
-          // Migrate configs saved before "format" replaced the doubleRound boolean.
-          const s = parsed.settings;
-          const format = s.format || (s.doubleRound ? "doubleRound" : "singleRound");
-          setSettings((prev) => ({ ...prev, ...s, format }));
+          // Season format is fixed to "random" — no UI offers the old
+          // doubleRound/singleRound modes anymore, so force it here too in
+          // case a config was saved before this was simplified.
+          setSettings((prev) => ({ ...prev, ...parsed.settings, format: "random" }));
         }
         if (parsed.schedule) setSchedule(parsed.schedule);
       }
@@ -722,55 +722,40 @@ function ChalkLineScheduler({ storageKey }) {
               </div>
             </div>
             <div className="cl-settings-group">
-              <span className="cl-settings-label">Season format</span>
-              <div className="cl-radio-set">
-                <label className="cl-radio-opt"><input type="radio" checked={settings.format === "doubleRound"}
-                  onChange={() => setSettings((s) => ({ ...s, format: "doubleRound" }))} /> Home &amp; away (play everyone twice)</label>
-                <label className="cl-radio-opt"><input type="radio" checked={settings.format === "singleRound"}
-                  onChange={() => setSettings((s) => ({ ...s, format: "singleRound" }))} /> Single round (once each)</label>
-                <label className="cl-radio-opt"><input type="radio" checked={settings.format === "random"}
-                  onChange={() => setSettings((s) => ({ ...s, format: "random" }))} /> Random matchups (not everyone plays everyone)</label>
-              </div>
-            </div>
-            <div className="cl-settings-group">
               <span className="cl-settings-label">First match night</span>
               <input type="date" className="cl-input" value={settings.startDate}
                 onChange={(e) => setSettings((s) => ({ ...s, startDate: e.target.value }))} />
             </div>
-            {settings.format === "random" && (
-              <div className="cl-settings-group">
-                <span className="cl-settings-label">Number of weeks</span>
-                <input type="number" min="1" className="cl-input cl-input-num" value={settings.weeks}
-                  onChange={(e) => setSettings((s) => ({ ...s, weeks: e.target.value }))} />
-              </div>
-            )}
-          </div>
-          {settings.format === "random" && (
-            <div className="cl-card" style={{ marginTop: 12 }}>
-              <span className="cl-settings-label">Weeks off (holidays, etc.)</span>
-              <div className="cl-form-row" style={{ flexWrap: "wrap", marginTop: 8 }}>
-                {(settings.blackoutDates || []).map((d) => (
-                  <span className="cl-tag" key={d} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    {d}
-                    <button type="button" className="cl-icon-btn" style={{ padding: "0 2px" }}
-                      onClick={() => setSettings((s) => ({ ...s, blackoutDates: s.blackoutDates.filter((x) => x !== d) }))}>✕</button>
-                  </span>
-                ))}
-              </div>
-              <div className="cl-form-row">
-                <input type="date" className="cl-input" value={blackoutInput}
-                  onChange={(e) => setBlackoutInput(e.target.value)} />
-                <button type="button" className="cl-btn cl-btn-ghost" onClick={() => {
-                  if (!blackoutInput) return;
-                  setSettings((s) => ({
-                    ...s,
-                    blackoutDates: [...new Set([...(s.blackoutDates || []), blackoutInput])].sort(),
-                  }));
-                  setBlackoutInput("");
-                }}>+ Add</button>
-              </div>
+            <div className="cl-settings-group">
+              <span className="cl-settings-label">Number of weeks</span>
+              <input type="number" min="1" className="cl-input cl-input-num" value={settings.weeks}
+                onChange={(e) => setSettings((s) => ({ ...s, weeks: e.target.value }))} />
             </div>
-          )}
+          </div>
+          <div className="cl-card" style={{ marginTop: 12 }}>
+            <span className="cl-settings-label">Weeks off (holidays, etc.)</span>
+            <div className="cl-form-row" style={{ flexWrap: "wrap", marginTop: 8 }}>
+              {(settings.blackoutDates || []).map((d) => (
+                <span className="cl-tag" key={d} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  {d}
+                  <button type="button" className="cl-icon-btn" style={{ padding: "0 2px" }}
+                    onClick={() => setSettings((s) => ({ ...s, blackoutDates: s.blackoutDates.filter((x) => x !== d) }))}>✕</button>
+                </span>
+              ))}
+            </div>
+            <div className="cl-form-row">
+              <input type="date" className="cl-input" value={blackoutInput}
+                onChange={(e) => setBlackoutInput(e.target.value)} />
+              <button type="button" className="cl-btn cl-btn-ghost" onClick={() => {
+                if (!blackoutInput) return;
+                setSettings((s) => ({
+                  ...s,
+                  blackoutDates: [...new Set([...(s.blackoutDates || []), blackoutInput])].sort(),
+                }));
+                setBlackoutInput("");
+              }}>+ Add</button>
+            </div>
+          </div>
         </div>
 
         <div className="cl-actions">
