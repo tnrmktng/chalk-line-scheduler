@@ -564,17 +564,53 @@ const homeAwayBalanceScore = (teamState) => {
 // wantsHome heuristic behaves similarly regardless of processing order and
 // bar capacity can force its hand anyway. This directly targets whatever
 // imbalance is left: for any match where the home team is meaningfully more
-// home-heavy than the away team is away-heavy, swap who hosts — for free
-// when both teams share a bar (nothing about capacity changes), otherwise
+// home-heavy than the away team is away-heavy, swap who hosts: free when
+// both teams share a bar (nothing about capacity changes), otherwise
 // only when the away team's bar actually has a free table that week. Each
 // swap strictly shrinks the gap between that pair, so this always
 // terminates rather than flip-flopping.
-function repairHomeAwayBalance(result, teams, bars, lockedBeforeRound = 0) {
-  const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
-  const barsById = Object.fromEntries(bars.map((b) => [b.id, b]));
+// Swaps who hosts a match: free at a shared bar (nothing about capacity
+// changes), otherwise only if the new host's bar actually has a free
+// table that week. Shared by both repair passes below.
+function flipMatchHost(m, week, teamState, teamsById, barsById) {
+  const hostId = m.homeId, guestId = m.awayId;
+  const newHostId = guestId, newGuestId = hostId;
+  const newBarId = teamsById[newHostId].barId;
+  const oldBarId = m.barId;
+  if (!m.sharedBar) {
+    const cap = barsById[newBarId]?.tables ?? 0;
+    const used = week.barUsage[newBarId] ?? 0;
+    if (used >= cap) return false;
+  }
+  const hs = teamState[hostId], gs = teamState[guestId];
+  m.homeId = newHostId; m.awayId = newGuestId; m.barId = newBarId;
+  hs.homeCount -= 1; hs.awayCount += 1;
+  gs.homeCount += 1; gs.awayCount -= 1;
+  if (!m.sharedBar) {
+    week.barUsage[oldBarId] = (week.barUsage[oldBarId] ?? 0) - 1;
+    week.barUsage[newBarId] = (week.barUsage[newBarId] ?? 0) + 1;
+  }
+  return true;
+}
+
+function cloneScheduleResult(result) {
   const teamState = {};
   Object.entries(result.teamState).forEach(([id, s]) => { teamState[id] = { ...s }; });
   const weeks = result.weeks.map((w) => ({ ...w, matches: w.matches.map((m) => ({ ...m })), barUsage: { ...w.barUsage } }));
+  return { weeks, teamState, issues: result.issues };
+}
+
+// Trying several round shuffles (above) only gets so far, since the
+// wantsHome heuristic behaves similarly regardless of processing order and
+// bar capacity can force its hand anyway. This directly targets whatever
+// imbalance is left: for any match where the home team is meaningfully more
+// home-heavy than the away team is away-heavy, swap who hosts. Each swap
+// strictly shrinks the gap between that pair, so this always terminates
+// rather than flip-flopping.
+function repairHomeAwayBalance(result, teams, bars, lockedBeforeRound = 0) {
+  const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
+  const barsById = Object.fromEntries(bars.map((b) => [b.id, b]));
+  const { weeks, teamState, issues } = cloneScheduleResult(result);
 
   let improvedAny = true;
   let guard = 0;
@@ -584,34 +620,228 @@ function repairHomeAwayBalance(result, teams, bars, lockedBeforeRound = 0) {
     for (const week of weeks) {
       if (week.round < lockedBeforeRound) continue; // never touch already-printed weeks
       for (const m of week.matches) {
-        const hostId = m.homeId, guestId = m.awayId;
-        const hs = teamState[hostId], gs = teamState[guestId];
+        const hs = teamState[m.homeId], gs = teamState[m.awayId];
         const hostDiff = hs.homeCount - hs.awayCount;
         const guestDiff = gs.homeCount - gs.awayCount;
         if (hostDiff <= guestDiff + 1) continue;
-
-        const newHostId = guestId, newGuestId = hostId;
-        const newBarId = teamsById[newHostId].barId;
-        const oldBarId = m.barId;
-        if (!m.sharedBar) {
-          const cap = barsById[newBarId]?.tables ?? 0;
-          const used = week.barUsage[newBarId] ?? 0;
-          if (used >= cap) continue;
-        }
-
-        m.homeId = newHostId; m.awayId = newGuestId; m.barId = newBarId;
-        hs.homeCount -= 1; hs.awayCount += 1;
-        gs.homeCount += 1; gs.awayCount -= 1;
-        if (!m.sharedBar) {
-          week.barUsage[oldBarId] = (week.barUsage[oldBarId] ?? 0) - 1;
-          week.barUsage[newBarId] = (week.barUsage[newBarId] ?? 0) + 1;
-        }
-        improvedAny = true;
+        if (flipMatchHost(m, week, teamState, teamsById, barsById)) improvedAny = true;
       }
     }
   }
 
-  return { weeks, teamState, issues: result.issues };
+  return { weeks, teamState, issues };
+}
+
+// A team can be balanced over the season and still play home (or away)
+// several weeks running: home in weeks 1-2-3 then away 4-5-6 nets out even,
+// but nobody wants to drive to every match for three weeks straight. This
+// builds each team's actual week-by-week sequence of home/away (bye weeks
+// don't count, since nothing happens that week), used below to find and
+// fix those runs.
+function buildTeamVenueTimelines(teams, weeks) {
+  const timelines = {};
+  teams.forEach((t) => (timelines[t.id] = []));
+  weeks.forEach((week, weekIdx) => {
+    week.matches.forEach((m) => {
+      if (timelines[m.homeId]) timelines[m.homeId].push({ weekIdx, match: m, venue: "home" });
+      if (timelines[m.awayId]) timelines[m.awayId].push({ weekIdx, match: m, venue: "away" });
+    });
+  });
+  return timelines;
+}
+
+function venueExcess(venueSeq, maxStreak) {
+  let excess = 0, streakStart = 0;
+  for (let i = 1; i <= venueSeq.length; i++) {
+    if (i < venueSeq.length && venueSeq[i] === venueSeq[streakStart]) continue;
+    const len = i - streakStart;
+    if (len > maxStreak) excess += len - maxStreak;
+    streakStart = i;
+  }
+  return excess;
+}
+
+// A first balance-only pass (repairHomeAwayBalance, above) and a
+// streak-only pass run one after the other just fight each other: the
+// balance pass has no idea a flip it "corrects" was the one holding a
+// streak in check, so it happily undoes it for a marginal balance gain.
+// This scores every candidate flip on both concerns: a flip is only ever
+// considered if it doesn't make balance worse (balance is already
+// near-optimal coming in, so it isn't up for trade), and among the flips
+// that pass that bar, it picks whichever most reduces streak excess.
+// Fixing one thing can never quietly break the other.
+function balanceExcess(diff) {
+  return Math.max(0, Math.abs(diff) - 1);
+}
+
+function repairSchedule(result, teams, bars, lockedBeforeRound = 0, maxStreak = 1) {
+  const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
+  const barsById = Object.fromEntries(bars.map((b) => [b.id, b]));
+  const { weeks, teamState, issues } = cloneScheduleResult(result);
+
+  let guard = 0;
+  let improved = true;
+  while (improved && guard < 2000) {
+    improved = false;
+    guard++;
+
+    const timelines = buildTeamVenueTimelines(teams, weeks);
+    const posByTeam = {};
+    teams.forEach((t) => {
+      const map = new Map();
+      timelines[t.id].forEach((entry, idx) => map.set(entry.match, idx));
+      posByTeam[t.id] = map;
+    });
+
+    let bestDelta = 0;
+    let bestMatch = null, bestWeek = null;
+
+    for (const week of weeks) {
+      if (week.round < lockedBeforeRound) continue;
+      for (const m of week.matches) {
+        const hostId = m.homeId, guestId = m.awayId;
+        const hostSeq = timelines[hostId].map((e) => e.venue);
+        const guestSeq = timelines[guestId].map((e) => e.venue);
+        const hostPos = posByTeam[hostId].get(m);
+        const guestPos = posByTeam[guestId].get(m);
+
+        const streakBefore = venueExcess(hostSeq, maxStreak) + venueExcess(guestSeq, maxStreak);
+        const hostSeqAfter = hostSeq.slice(); hostSeqAfter[hostPos] = "away";
+        const guestSeqAfter = guestSeq.slice(); guestSeqAfter[guestPos] = "home";
+        const streakAfter = venueExcess(hostSeqAfter, maxStreak) + venueExcess(guestSeqAfter, maxStreak);
+
+        const hs = teamState[hostId], gs = teamState[guestId];
+        const hostDiff = hs.homeCount - hs.awayCount, guestDiff = gs.homeCount - gs.awayCount;
+        const balBefore = balanceExcess(hostDiff) + balanceExcess(guestDiff);
+        const balAfter = balanceExcess(hostDiff - 2) + balanceExcess(guestDiff + 2);
+        if (balAfter > balBefore) continue; // never trade balance away for a streak fix
+
+        const delta = streakAfter - streakBefore;
+        if (delta >= bestDelta) continue; // only strictly-improving moves count
+
+        let capacityOk = m.sharedBar;
+        if (!capacityOk) {
+          const newBarId = teamsById[guestId].barId;
+          const cap = barsById[newBarId]?.tables ?? 0;
+          const used = week.barUsage[newBarId] ?? 0;
+          capacityOk = used < cap;
+        }
+        if (capacityOk) { bestDelta = delta; bestMatch = m; bestWeek = week; }
+      }
+    }
+
+    if (bestMatch) {
+      flipMatchHost(bestMatch, bestWeek, teamState, teamsById, barsById);
+      improved = true;
+    }
+  }
+
+  return { weeks, teamState, issues };
+}
+
+function findStreakIssues(teams, weeks, maxStreak) {
+  const timelines = buildTeamVenueTimelines(teams, weeks);
+  const issues = [];
+  teams.forEach((t) => {
+    const timeline = timelines[t.id];
+    let streakStart = 0;
+    for (let i = 1; i <= timeline.length; i++) {
+      if (i < timeline.length && timeline[i].venue === timeline[streakStart].venue) continue;
+      const streakLen = i - streakStart;
+      if (streakLen > maxStreak) {
+        issues.push(`${t.name}: ${streakLen} ${timeline[streakStart].venue} games in a row, since table limits at a shared bar made it unavoidable.`);
+      }
+      streakStart = i;
+    }
+  });
+  return issues;
+}
+
+// Who's home each week is already decided and already balanced by this
+// point, so the only thing left to fix is which CALENDAR WEEK each
+// already-decided round lands in. Swapping which round happens in week 6
+// vs week 19 changes nothing about who plays whom, who hosts, or any bar's
+// capacity that week; it only changes the sequence a team experiences
+// their already-fixed home/away pattern in. That makes this the safest
+// possible lever for streaks: it can only help, never disturb balance or
+// capacity, so it runs before the host-flipping repair, not after.
+function excessForWeekContent(contentByIdx, teams, maxStreak) {
+  const timelines = {};
+  teams.forEach((t) => (timelines[t.id] = []));
+  contentByIdx.forEach((content) => {
+    content.matches.forEach((m) => {
+      if (timelines[m.homeId]) timelines[m.homeId].push("home");
+      if (timelines[m.awayId]) timelines[m.awayId].push("away");
+    });
+  });
+  let total = 0;
+  teams.forEach((t) => { total += venueExcess(timelines[t.id], maxStreak); });
+  return total;
+}
+
+// Building the order left-to-right, always placing next whichever
+// still-unplaced round extends the fewest active streaks, works far
+// better for this "spread repeats apart" shape of problem than shuffling
+// an already-fixed order and hoping a swap helps, the same idea as a task
+// scheduler spacing out repeated work instead of clumping it. Locked
+// (already-printed) weeks seed the starting streaks but are never
+// themselves moved. Ties are broken randomly so multiple attempts (below)
+// explore different orderings.
+function constructWeekOrderOnce(weeks, teams, swappableIdx) {
+  const result = weeks.map((w) => ({ ...w }));
+  const swappableSet = new Set(swappableIdx);
+  const state = {};
+  teams.forEach((t) => { state[t.id] = { lastVenue: null, streak: 0 }; });
+
+  const applyToState = (matches) => {
+    matches.forEach((m) => {
+      const hs = state[m.homeId];
+      if (hs) { hs.streak = hs.lastVenue === "home" ? hs.streak + 1 : 1; hs.lastVenue = "home"; }
+      const gs = state[m.awayId];
+      if (gs) { gs.streak = gs.lastVenue === "away" ? gs.streak + 1 : 1; gs.lastVenue = "away"; }
+    });
+  };
+
+  // Seed state from any locked prefix so streaks spanning the boundary count.
+  result.forEach((w, idx) => { if (!swappableSet.has(idx)) applyToState(w.matches); });
+
+  let pool = swappableIdx.map((i) => ({ matches: result[i].matches, byeId: result[i].byeId, barUsage: result[i].barUsage }));
+
+  swappableIdx.forEach((slot) => {
+    let bestBadness = Infinity, ties = [];
+    pool.forEach((content, idx) => {
+      let badness = 0;
+      content.matches.forEach((m) => {
+        const hs = state[m.homeId];
+        if (hs && hs.lastVenue === "home") badness += hs.streak;
+        const gs = state[m.awayId];
+        if (gs && gs.lastVenue === "away") badness += gs.streak;
+      });
+      if (badness < bestBadness) { bestBadness = badness; ties = [idx]; }
+      else if (badness === bestBadness) { ties.push(idx); }
+    });
+    const chosenIdx = ties[Math.floor(Math.random() * ties.length)];
+    const chosen = pool.splice(chosenIdx, 1)[0];
+    result[slot] = { ...result[slot], matches: chosen.matches, byeId: chosen.byeId, barUsage: chosen.barUsage };
+    applyToState(chosen.matches);
+  });
+
+  return result;
+}
+
+function reorderWeeksToReduceStreaks(weeks, teams, maxStreak = 1, lockedBeforeRound = 0) {
+  const swappableIdx = weeks.map((w, i) => i).filter((i) => weeks[i].round >= lockedBeforeRound);
+  if (swappableIdx.length < 2) return weeks;
+
+  const ATTEMPTS = 40;
+  let best = null, bestExcess = null;
+  for (let n = 0; n < ATTEMPTS; n++) {
+    const attempt = constructWeekOrderOnce(weeks, teams, swappableIdx);
+    const excess = excessForWeekContent(attempt.map((w) => ({ matches: w.matches })), teams, maxStreak);
+    if (best === null || excess < bestExcess) { best = attempt; bestExcess = excess; }
+    if (bestExcess === 0) break;
+  }
+  return best;
 }
 
 function buildRandomSchedule(teams, bars, weeksCount) {
@@ -634,8 +864,11 @@ function buildRandomSchedule(teams, bars, weeksCount) {
     if (bestScore.maxAbs <= 1) break; // every team within one game of even — good enough
   }
 
-  const repaired = repairHomeAwayBalance(best, teams, bars);
-  return { weeks: repaired.weeks, teamState: repaired.teamState, issues: [...rangeIssue, ...repaired.issues] };
+  let repaired = repairHomeAwayBalance(best, teams, bars);
+  repaired.weeks = reorderWeeksToReduceStreaks(repaired.weeks, teams, 1);
+  repaired = repairSchedule(repaired, teams, bars);
+  const streakIssues = findStreakIssues(teams, repaired.weeks, 2);
+  return { weeks: repaired.weeks, teamState: repaired.teamState, issues: [...rangeIssue, ...repaired.issues, ...streakIssues] };
 }
 
 // ---------- mid-season amendments (add/drop a team without touching
@@ -781,7 +1014,11 @@ function buildContinuationSchedule(existingWeeks, fromWeekNumber, teams, bars) {
     }
     if (bestScore.maxAbs <= 1) break;
   }
-  return repairHomeAwayBalance(best, teams, bars, fromWeekNumber);
+  let repaired = repairHomeAwayBalance(best, teams, bars, fromWeekNumber);
+  repaired.weeks = reorderWeeksToReduceStreaks(repaired.weeks, teams, 1, fromWeekNumber);
+  repaired = repairSchedule(repaired, teams, bars, fromWeekNumber);
+  const streakIssues = findStreakIssues(teams, repaired.weeks, 2);
+  return { weeks: repaired.weeks, teamState: repaired.teamState, issues: [...repaired.issues, ...streakIssues] };
 }
 
 // ---------- Pueblo 8-Ball 26/27 season ----------
@@ -815,7 +1052,7 @@ const seedTeams = [
   { id: "t8", name: "Cosmopolitan 1", barId: "b6" },
   { id: "t9", name: "Cosmopolitan 2", barId: "b6" },
   { id: "t10", name: "Elks 1", barId: "b7" },
-  { id: "t11", name: "Elks Too", barId: "b7" },
+  { id: "t11", name: "Elks 2", barId: "b7" },
   { id: "t12", name: "Elks 3", barId: "b7" },
   { id: "t13", name: "Fallout", barId: "b8" },
   { id: "t14", name: "Heart N Soul", barId: "b9" },
