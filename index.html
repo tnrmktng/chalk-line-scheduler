@@ -198,6 +198,32 @@
     background: var(--brass); color: white; border: none; padding: 10px 20px; border-radius: 8px;
     font-weight: 600; cursor: pointer; font-size: 14px;
   }
+
+  /* --- print / save-as-PDF: plain black-on-white, no color --- */
+  @media print {
+    body { background: white; padding: 0; display: block; }
+    #root { max-width: none; }
+    .cl-app { border-radius: 0; border: none; box-shadow: none; background: white; color: black; }
+    .cl-header { background: white !important; color: black !important; padding: 10px 0 14px; border-bottom: 2px solid black; }
+    .cl-header::after { display: none; }
+    .cl-subtitle { color: #333 !important; }
+    .cl-notice,
+    .cl-grid-2,
+    .cl-actions,
+    .cl-issues,
+    .cl-dots,
+    .no-print { display: none !important; }
+    .cl-section-title { color: black !important; }
+    .cl-week { border: 1px solid #333; break-inside: avoid; page-break-inside: avoid; }
+    .cl-week-head { background: #eee !important; color: black !important; border-bottom: 1px solid #333; }
+    .cl-night { border-top-color: #ccc !important; }
+    .cl-side { color: black; }
+    .cl-badge-home, .cl-badge-away { background: white !important; color: black !important; border: 1px solid black; }
+    .cl-vs, .cl-venue, .cl-night-date, .cl-bye { color: #333 !important; }
+    .cl-summary-table th { color: black !important; border-bottom-color: black !important; }
+    .cl-summary-table td { border-bottom-color: #ccc !important; }
+    .cl-body { padding: 16px 20px 24px; }
+  }
 </style>
 </head>
 <body>
@@ -224,6 +250,22 @@ const addDays = (isoDate, days) => {
   return d;
 };
 const formatDate = (d) => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+
+// Walks forward from startDate at the given weekly cadence, skipping any
+// date that falls in blackoutSet (e.g. holiday weeks), until `count` play
+// dates have been collected.
+function computePlayDates(startDate, matchesPerWeek, blackoutSet, count) {
+  const dates = [];
+  let stepIndex = 0;
+  while (dates.length < count && stepIndex < count * 4 + 52) {
+    const dayOffset = stepIndex * (7 / matchesPerWeek);
+    const d = addDays(startDate, dayOffset);
+    stepIndex++;
+    if (blackoutSet.has(d.toISOString().slice(0, 10))) continue;
+    dates.push(d);
+  }
+  return dates;
+}
 
 const wantsHome = (state) => {
   const balance = state.awayCount - state.homeCount;
@@ -296,9 +338,17 @@ function backtrackAssign(freeMatches, teamsById, capacity, teamState) {
 
 function buildSchedule(teams, bars, settings) {
   if (teams.length < 2) return { error: "Add at least two teams before generating a schedule." };
+  if (settings.format === "random") {
+    const weeksCount = Math.max(1, Number(settings.weeks) || 1);
+    return buildRandomSchedule(teams, bars, weeksCount);
+  }
+  return buildRoundRobinSchedule(teams, bars, settings);
+}
+
+function buildRoundRobinSchedule(teams, bars, settings) {
   const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
   const singleRounds = generateRoundRobinPairs(teams.map((t) => t.id));
-  const sequence = settings.doubleRound ? [...singleRounds, ...singleRounds] : singleRounds;
+  const sequence = settings.format === "doubleRound" ? [...singleRounds, ...singleRounds] : singleRounds;
 
   const teamState = {};
   teams.forEach((t) => (teamState[t.id] = { homeCount: 0, awayCount: 0, lastVenue: null }));
@@ -307,7 +357,7 @@ function buildSchedule(teams, bars, settings) {
   const issues = [];
 
   sequence.forEach((pairs, idx) => {
-    const leg = settings.doubleRound ? (idx < singleRounds.length ? 1 : 2) : 1;
+    const leg = settings.format === "doubleRound" ? (idx < singleRounds.length ? 1 : 2) : 1;
     const capacityLeft = {};
     bars.forEach((b) => (capacityLeft[b.id] = b.tables));
 
@@ -372,33 +422,177 @@ function buildSchedule(teams, bars, settings) {
   return { weeks, teamState, issues };
 }
 
-// ---------- seed example ----------
+// Not everyone plays everyone — each week randomly pairs teams instead of
+// rotating through a full round-robin. Still prefers pairings that haven't
+// happened yet (falls back to the least-repeated pair once most have), and
+// rotates the bye fairly so one team doesn't sit out more than others.
+function generateRandomPairs(teamIds, pairCount, byeCount) {
+  let pool = [...teamIds];
+  let byeId = null;
+  if (pool.length % 2 !== 0) {
+    const minBye = Math.min(...pool.map((id) => byeCount[id] ?? 0));
+    const candidates = pool.filter((id) => (byeCount[id] ?? 0) === minBye);
+    byeId = candidates[Math.floor(Math.random() * candidates.length)];
+    byeCount[byeId] = (byeCount[byeId] ?? 0) + 1;
+    pool = pool.filter((id) => id !== byeId);
+  }
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const used = new Set();
+  const pairs = [];
+  for (let i = 0; i < pool.length; i++) {
+    const a = pool[i];
+    if (used.has(a)) continue;
+    used.add(a);
+    let best = null, bestScore = Infinity;
+    for (let j = 0; j < pool.length; j++) {
+      const b = pool[j];
+      if (b === a || used.has(b)) continue;
+      const score = pairCount[[a, b].sort().join("|")] || 0;
+      if (score < bestScore) { bestScore = score; best = b; }
+    }
+    if (best == null) continue;
+    used.add(best);
+    pairCount[[a, best].sort().join("|")] = (pairCount[[a, best].sort().join("|")] || 0) + 1;
+    pairs.push([a, best]);
+  }
+  return { pairs, byeId };
+}
+
+function buildRandomSchedule(teams, bars, weeksCount) {
+  const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
+  const teamState = {};
+  teams.forEach((t) => (teamState[t.id] = { homeCount: 0, awayCount: 0, lastVenue: null }));
+  const pairCount = {};
+  const byeCount = {};
+  teams.forEach((t) => (byeCount[t.id] = 0));
+  const weeks = [];
+  const issues = [];
+
+  for (let w = 0; w < weeksCount; w++) {
+    const { pairs, byeId } = generateRandomPairs(teams.map((t) => t.id), pairCount, byeCount);
+    const capacityLeft = {};
+    bars.forEach((b) => (capacityLeft[b.id] = b.tables));
+
+    const decided = [];
+    const free = [];
+    pairs.forEach(([a, b]) => {
+      const ta = teamsById[a], tb = teamsById[b];
+      if (ta.barId === tb.barId) {
+        decided.push({ a, b, hostId: null, sharedBar: true });
+      } else {
+        free.push({ a, b });
+      }
+    });
+
+    decided.forEach((m) => {
+      const prefA = wantsHome(teamState[m.a]);
+      const prefB = wantsHome(teamState[m.b]);
+      m.hostId = prefA >= prefB ? m.a : m.b;
+      capacityLeft[teamsById[m.hostId].barId] = (capacityLeft[teamsById[m.hostId].barId] ?? 0) - 1;
+    });
+
+    const assigned = backtrackAssign(free, teamsById, capacityLeft, teamState);
+    if (!assigned.ok) issues.push(`Week ${w + 1}: table limits were tight — one match may need a manual swap.`);
+
+    const allMatches = [...decided, ...assigned.matches];
+    const barUsage = {};
+    bars.forEach((b) => (barUsage[b.id] = 0));
+    allMatches.forEach((m) => { barUsage[teamsById[m.hostId].barId] = (barUsage[teamsById[m.hostId].barId] ?? 0) + 1; });
+
+    allMatches.forEach((m) => {
+      const hostId = m.hostId;
+      const guestId = m.a === hostId ? m.b : m.a;
+      teamState[hostId].homeCount += 1; teamState[hostId].lastVenue = "home";
+      teamState[guestId].awayCount += 1; teamState[guestId].lastVenue = "away";
+    });
+
+    weeks.push({
+      round: w + 1, leg: 1,
+      matches: allMatches.map((m) => ({
+        homeId: m.hostId, awayId: m.a === m.hostId ? m.b : m.a,
+        barId: teamsById[m.hostId].barId, sharedBar: !!m.sharedBar,
+      })),
+      byeId,
+      barUsage,
+    });
+  }
+
+  return { weeks, teamState, issues };
+}
+
+// ---------- Pueblo 8-Ball 26/27 season ----------
 const seedBars = [
-  { id: "b1", name: "Corner Pocket", tables: 1 },
-  { id: "b2", name: "Rack 'Em Tavern", tables: 2 },
-  { id: "b3", name: "Side Pocket Saloon", tables: 1 },
-  { id: "b4", name: "Eight Ball Depot", tables: 1 },
+  { id: "b1", name: "Broadway Inn", tables: 1 },
+  { id: "b2", name: "Buffalo Bar", tables: 1 },
+  { id: "b3", name: "Charlie's Tavern", tables: 1 },
+  { id: "b4", name: "Chuck's Place", tables: 1 },
+  { id: "b5", name: "Circle Lounge", tables: 1 },
+  { id: "b6", name: "Cosmopolitan Bar", tables: 1 },
+  { id: "b7", name: "Elks Club", tables: 2 },
+  { id: "b8", name: "Sunset Bowl", tables: 1 },
+  { id: "b9", name: "Heart and Soul", tables: 1 },
+  { id: "b10", name: "High Octane BBQ", tables: 1 },
+  { id: "b11", name: "Jimmy's Tavern", tables: 2 },
+  { id: "b12", name: "Lakeview Bar", tables: 1 },
+  { id: "b13", name: "Senate Lounge", tables: 1 },
+  { id: "b14", name: "Senate at Elmwood", tables: 1 },
+  { id: "b15", name: "Star Bar", tables: 1 },
+  { id: "b16", name: "T's Bar", tables: 1 },
+  { id: "b17", name: "Veteran's Lounge", tables: 1 },
 ];
 const seedTeams = [
-  { id: "t1", name: "Corner Pocket A", barId: "b1" },
-  { id: "t2", name: "Corner Pocket B", barId: "b1" },
-  { id: "t3", name: "Rack 'Em Hustlers", barId: "b2" },
-  { id: "t4", name: "Rack 'Em Sharks", barId: "b2" },
-  { id: "t5", name: "Side Pocket Wolves", barId: "b3" },
-  { id: "t6", name: "Eight Ball Aces", barId: "b4" },
+  { id: "t1", name: "Broadway", barId: "b1" },
+  { id: "t2", name: "Buffalo 1", barId: "b2" },
+  { id: "t3", name: "Buffalo 2", barId: "b2" },
+  { id: "t4", name: "Charlie's 1", barId: "b3" },
+  { id: "t5", name: "Charlie's 2", barId: "b3" },
+  { id: "t6", name: "Chuck's", barId: "b4" },
+  { id: "t7", name: "Circle 1", barId: "b5" },
+  { id: "t8", name: "Cosmopolitan 1", barId: "b6" },
+  { id: "t9", name: "Cosmopolitan 2", barId: "b6" },
+  { id: "t10", name: "Elks 1", barId: "b7" },
+  { id: "t11", name: "Elks Too", barId: "b7" },
+  { id: "t12", name: "Elks 3", barId: "b7" },
+  { id: "t13", name: "Fallout", barId: "b8" },
+  { id: "t14", name: "Heart N Soul", barId: "b9" },
+  { id: "t15", name: "High Octane", barId: "b10" },
+  { id: "t16", name: "Jimmy's", barId: "b11" },
+  { id: "t17", name: "Jimmy's Big Dogs", barId: "b11" },
+  { id: "t18", name: "Lakeview 1", barId: "b12" },
+  { id: "t19", name: "Lakeview 2", barId: "b12" },
+  { id: "t20", name: "Senate 1", barId: "b13" },
+  { id: "t21", name: "Senate 2", barId: "b13" },
+  { id: "t22", name: "Senate of Elmwood", barId: "b14" },
+  { id: "t23", name: "Senate Smoke Break", barId: "b14" },
+  { id: "t24", name: "Smokin Circle", barId: "b5" },
+  { id: "t25", name: "Star Bar", barId: "b15" },
+  { id: "t26", name: "T's 1", barId: "b16" },
+  { id: "t27", name: "T's 2", barId: "b16" },
+  { id: "t28", name: "Veteran's 1", barId: "b17" },
+  { id: "t29", name: "Vet's Rack N Watch", barId: "b17" },
 ];
 
 // ---------- main scheduler app ----------
 function ChalkLineScheduler({ storageKey }) {
   const [bars, setBars] = useState(seedBars);
   const [teams, setTeams] = useState(seedTeams);
-  const [settings, setSettings] = useState({ matchesPerWeek: 1, doubleRound: true, startDate: todayISO() });
+  const [settings, setSettings] = useState({
+    matchesPerWeek: 1,
+    format: "random",
+    startDate: "2026-09-10",
+    weeks: 26,
+    blackoutDates: ["2026-11-26", "2026-12-24", "2026-12-31"],
+  });
   const [barName, setBarName] = useState("");
   const [barTables, setBarTables] = useState(1);
   const [teamName, setTeamName] = useState("");
   const [teamBar, setTeamBar] = useState("");
   const [schedule, setSchedule] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [blackoutInput, setBlackoutInput] = useState("");
 
   useEffect(() => {
     try {
@@ -407,7 +601,12 @@ function ChalkLineScheduler({ storageKey }) {
         const parsed = JSON.parse(raw);
         if (parsed.bars) setBars(parsed.bars);
         if (parsed.teams) setTeams(parsed.teams);
-        if (parsed.settings) setSettings(parsed.settings);
+        if (parsed.settings) {
+          // Migrate configs saved before "format" replaced the doubleRound boolean.
+          const s = parsed.settings;
+          const format = s.format || (s.doubleRound ? "doubleRound" : "singleRound");
+          setSettings((prev) => ({ ...prev, ...s, format }));
+        }
         if (parsed.schedule) setSchedule(parsed.schedule);
       }
     } catch (e) { /* no saved config yet */ }
@@ -460,12 +659,13 @@ function ChalkLineScheduler({ storageKey }) {
 
   const weeksGrouped = useMemo(() => {
     if (!schedule) return [];
+    const blackoutSet = new Set(settings.blackoutDates || []);
+    const playDates = computePlayDates(settings.startDate, settings.matchesPerWeek, blackoutSet, schedule.weeks.length);
     const perWeek = {};
-    schedule.weeks.forEach((w) => {
+    schedule.weeks.forEach((w, i) => {
       const weekIdx = Math.floor((w.round - 1) / settings.matchesPerWeek);
       if (!perWeek[weekIdx]) perWeek[weekIdx] = [];
-      const dayOffset = (w.round - 1) * (7 / settings.matchesPerWeek);
-      perWeek[weekIdx].push({ ...w, date: addDays(settings.startDate, dayOffset) });
+      perWeek[weekIdx].push({ ...w, date: playDates[i] });
     });
     return Object.keys(perWeek).sort((a, b) => Number(a) - Number(b))
       .map((k) => ({ weekNumber: Number(k) + 1, nights: perWeek[k] }));
@@ -545,10 +745,12 @@ function ChalkLineScheduler({ storageKey }) {
             <div className="cl-settings-group">
               <span className="cl-settings-label">Season format</span>
               <div className="cl-radio-set">
-                <label className="cl-radio-opt"><input type="radio" checked={settings.doubleRound}
-                  onChange={() => setSettings((s) => ({ ...s, doubleRound: true }))} /> Home &amp; away (play everyone twice)</label>
-                <label className="cl-radio-opt"><input type="radio" checked={!settings.doubleRound}
-                  onChange={() => setSettings((s) => ({ ...s, doubleRound: false }))} /> Single round (once each)</label>
+                <label className="cl-radio-opt"><input type="radio" checked={settings.format === "doubleRound"}
+                  onChange={() => setSettings((s) => ({ ...s, format: "doubleRound" }))} /> Home &amp; away (play everyone twice)</label>
+                <label className="cl-radio-opt"><input type="radio" checked={settings.format === "singleRound"}
+                  onChange={() => setSettings((s) => ({ ...s, format: "singleRound" }))} /> Single round (once each)</label>
+                <label className="cl-radio-opt"><input type="radio" checked={settings.format === "random"}
+                  onChange={() => setSettings((s) => ({ ...s, format: "random" }))} /> Random matchups (not everyone plays everyone)</label>
               </div>
             </div>
             <div className="cl-settings-group">
@@ -556,7 +758,40 @@ function ChalkLineScheduler({ storageKey }) {
               <input type="date" className="cl-input" value={settings.startDate}
                 onChange={(e) => setSettings((s) => ({ ...s, startDate: e.target.value }))} />
             </div>
+            {settings.format === "random" && (
+              <div className="cl-settings-group">
+                <span className="cl-settings-label">Number of weeks</span>
+                <input type="number" min="1" className="cl-input cl-input-num" value={settings.weeks}
+                  onChange={(e) => setSettings((s) => ({ ...s, weeks: e.target.value }))} />
+              </div>
+            )}
           </div>
+          {settings.format === "random" && (
+            <div className="cl-card" style={{ marginTop: 12 }}>
+              <span className="cl-settings-label">Weeks off (holidays, etc.)</span>
+              <div className="cl-form-row" style={{ flexWrap: "wrap", marginTop: 8 }}>
+                {(settings.blackoutDates || []).map((d) => (
+                  <span className="cl-tag" key={d} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    {d}
+                    <button type="button" className="cl-icon-btn" style={{ padding: "0 2px" }}
+                      onClick={() => setSettings((s) => ({ ...s, blackoutDates: s.blackoutDates.filter((x) => x !== d) }))}>✕</button>
+                  </span>
+                ))}
+              </div>
+              <div className="cl-form-row">
+                <input type="date" className="cl-input" value={blackoutInput}
+                  onChange={(e) => setBlackoutInput(e.target.value)} />
+                <button type="button" className="cl-btn cl-btn-ghost" onClick={() => {
+                  if (!blackoutInput) return;
+                  setSettings((s) => ({
+                    ...s,
+                    blackoutDates: [...new Set([...(s.blackoutDates || []), blackoutInput])].sort(),
+                  }));
+                  setBlackoutInput("");
+                }}>+ Add</button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="cl-actions">
@@ -571,6 +806,9 @@ function ChalkLineScheduler({ storageKey }) {
 
         {schedule && !schedule.error && (
           <>
+            <div className="cl-section no-print" style={{ textAlign: "right", marginBottom: 12 }}>
+              <button className="cl-btn cl-btn-ghost" onClick={() => window.print()}>Print / Save as PDF</button>
+            </div>
             <div className="cl-section">
               <div className="cl-section-title">Schedule</div>
               {weeksGrouped.map((wk) => (
