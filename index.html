@@ -518,6 +518,134 @@ function buildRandomSchedule(teams, bars, weeksCount) {
   return { weeks, teamState, issues };
 }
 
+// ---------- mid-season amendments (add/drop a team without touching
+// weeks already printed/played) ----------
+const pairKey = (a, b) => [a, b].sort().join("|");
+
+// Finds one week's worth of pairings for the *current* roster that avoids
+// every pair in usedPairs, which includes both the locked weeks being kept
+// AND every pair already regenerated for later weeks in this same run.
+// Unlike the full-round-robin trick (which only works for a fixed, unchanging
+// roster), this has to search per week since the roster can change mid-season.
+function findNoRepeatWeek(teamIds, usedPairs, byeCounts, maxAttempts = 40) {
+  const byeOrder = [...teamIds].sort((a, b) => (byeCounts[a] || 0) - (byeCounts[b] || 0));
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const byeId = byeOrder[attempt % byeOrder.length];
+    const shuffled = teamIds.filter((id) => id !== byeId);
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    const used = new Set();
+    const pairs = [];
+    const backtrack = (pos) => {
+      while (pos < shuffled.length && used.has(shuffled[pos])) pos++;
+      if (pos >= shuffled.length) return true;
+      const a = shuffled[pos];
+      used.add(a);
+      const candidates = shuffled.filter((b) => b !== a && !used.has(b) && !usedPairs.has(pairKey(a, b)));
+      for (let i = candidates.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+      }
+      for (const b of candidates) {
+        used.add(b);
+        pairs.push([a, b]);
+        if (backtrack(pos + 1)) return true;
+        pairs.pop();
+        used.delete(b);
+      }
+      used.delete(a);
+      return false;
+    };
+    if (backtrack(0)) return { pairs, byeId };
+  }
+  return null;
+}
+
+// Keeps every week before fromWeekNumber exactly as-is, and rebuilds
+// fromWeekNumber onward using the current team/bar list, carrying forward
+// bye counts and home/away balance from the kept weeks so fairness continues
+// rather than resetting.
+function buildContinuationSchedule(existingWeeks, fromWeekNumber, teams, bars) {
+  const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
+  const teamIds = teams.map((t) => t.id);
+  const keptWeeks = existingWeeks.filter((w) => w.round < fromWeekNumber);
+  const totalWeeks = existingWeeks.length;
+
+  const usedPairs = new Set();
+  const byeCounts = {};
+  const teamState = {};
+  teamIds.forEach((id) => {
+    byeCounts[id] = 0;
+    teamState[id] = { homeCount: 0, awayCount: 0, lastVenue: null };
+  });
+
+  keptWeeks.forEach((w) => {
+    w.matches.forEach((m) => {
+      usedPairs.add(pairKey(m.homeId, m.awayId));
+      if (teamState[m.homeId]) { teamState[m.homeId].homeCount += 1; teamState[m.homeId].lastVenue = "home"; }
+      if (teamState[m.awayId]) { teamState[m.awayId].awayCount += 1; teamState[m.awayId].lastVenue = "away"; }
+    });
+    if (w.byeId != null && byeCounts[w.byeId] !== undefined) byeCounts[w.byeId] += 1;
+  });
+
+  const weeks = [...keptWeeks];
+  const issues = [];
+
+  for (let roundNum = fromWeekNumber; roundNum <= totalWeeks; roundNum++) {
+    const found = findNoRepeatWeek(teamIds, usedPairs, byeCounts);
+    if (!found) {
+      issues.push(`Week ${roundNum}: every remaining matchup for this roster has already been played, so regenerating stopped here. You may need to allow one repeat manually, or shorten the season.`);
+      break;
+    }
+    const { pairs, byeId } = found;
+    byeCounts[byeId] = (byeCounts[byeId] || 0) + 1;
+    pairs.forEach(([a, b]) => usedPairs.add(pairKey(a, b)));
+
+    const capacityLeft = {};
+    bars.forEach((b) => (capacityLeft[b.id] = b.tables));
+    const decided = [];
+    const free = [];
+    pairs.forEach(([a, b]) => {
+      const ta = teamsById[a], tb = teamsById[b];
+      if (ta.barId === tb.barId) decided.push({ a, b, hostId: null, sharedBar: true });
+      else free.push({ a, b });
+    });
+    decided.forEach((m) => {
+      const prefA = wantsHome(teamState[m.a]);
+      const prefB = wantsHome(teamState[m.b]);
+      m.hostId = prefA >= prefB ? m.a : m.b;
+      capacityLeft[teamsById[m.hostId].barId] = (capacityLeft[teamsById[m.hostId].barId] ?? 0) - 1;
+    });
+    const assigned = backtrackAssign(free, teamsById, capacityLeft, teamState);
+    if (!assigned.ok) issues.push(`Week ${roundNum}: table limits were tight — one match may need a manual swap.`);
+
+    const allMatches = [...decided, ...assigned.matches];
+    const barUsage = {};
+    bars.forEach((b) => (barUsage[b.id] = 0));
+    allMatches.forEach((m) => { barUsage[teamsById[m.hostId].barId] = (barUsage[teamsById[m.hostId].barId] ?? 0) + 1; });
+    allMatches.forEach((m) => {
+      const hostId = m.hostId;
+      const guestId = m.a === hostId ? m.b : m.a;
+      teamState[hostId].homeCount += 1; teamState[hostId].lastVenue = "home";
+      teamState[guestId].awayCount += 1; teamState[guestId].lastVenue = "away";
+    });
+
+    weeks.push({
+      round: roundNum, leg: 1,
+      matches: allMatches.map((m) => ({
+        homeId: m.hostId, awayId: m.a === m.hostId ? m.b : m.a,
+        barId: teamsById[m.hostId].barId, sharedBar: !!m.sharedBar,
+      })),
+      byeId,
+      barUsage,
+    });
+  }
+
+  return { weeks, teamState, issues };
+}
+
 // ---------- Pueblo 8-Ball 26/27 season ----------
 const seedBars = [
   { id: "b1", name: "Broadway Inn", tables: 1 },
@@ -588,6 +716,8 @@ function ChalkLineScheduler({ storageKey }) {
   const [schedule, setSchedule] = useState(null);
   const [notice, setNotice] = useState(null);
   const [blackoutInput, setBlackoutInput] = useState("");
+  const [amendWeek, setAmendWeek] = useState("");
+  const [teamArchive, setTeamArchive] = useState(() => Object.fromEntries(seedTeams.map((t) => [t.id, t])));
 
   useEffect(() => {
     try {
@@ -596,6 +726,7 @@ function ChalkLineScheduler({ storageKey }) {
         const parsed = JSON.parse(raw);
         if (parsed.bars) setBars(parsed.bars);
         if (parsed.teams) setTeams(parsed.teams);
+        if (parsed.teamArchive) setTeamArchive(parsed.teamArchive);
         if (parsed.settings) {
           // Season format is fixed to "random" — no UI offers the old
           // doubleRound/singleRound modes anymore, so force it here too in
@@ -607,8 +738,28 @@ function ChalkLineScheduler({ storageKey }) {
     } catch (e) { /* no saved config yet */ }
   }, [storageKey]);
 
+  // Removing a team from the roster (drop mid-season) must not erase its name
+  // from weeks that were already generated and printed against it, so every
+  // team ever seen is kept here, and only the active roster below is used for
+  // building future weeks.
+  useEffect(() => {
+    setTeamArchive((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      teams.forEach((t) => {
+        const existing = next[t.id];
+        if (!existing || existing.name !== t.name || existing.barId !== t.barId) {
+          next[t.id] = t;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [teams]);
+
   const barsById = useMemo(() => Object.fromEntries(bars.map((b) => [b.id, b])), [bars]);
-  const teamsById = useMemo(() => Object.fromEntries(teams.map((t) => [t.id, t])), [teams]);
+  const rosterById = useMemo(() => Object.fromEntries(teams.map((t) => [t.id, t])), [teams]);
+  const teamsById = useMemo(() => ({ ...teamArchive, ...rosterById }), [teamArchive, rosterById]);
 
   const flash = (msg) => { setNotice(msg); setTimeout(() => setNotice(null), 3200); };
 
@@ -645,9 +796,26 @@ function ChalkLineScheduler({ storageKey }) {
     runGenerate(shuffled);
   };
 
+  const amendSchedule = () => {
+    if (!schedule || schedule.error) { flash("Generate a schedule first."); return; }
+    const w = Number(amendWeek);
+    if (!w || w < 1 || w > schedule.weeks.length) {
+      flash(`Enter a week number between 1 and ${schedule.weeks.length}.`);
+      return;
+    }
+    const result = buildContinuationSchedule(schedule.weeks, w, teams, bars);
+    setSchedule(result);
+    const keptCount = w - 1;
+    flash(
+      keptCount > 0
+        ? `Weeks 1–${keptCount} left untouched. Weeks ${w}–${schedule.weeks.length} regenerated with your current teams.`
+        : `Whole schedule regenerated with your current teams.`
+    );
+  };
+
   const saveConfig = () => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ bars, teams, settings, schedule }));
+      localStorage.setItem(storageKey, JSON.stringify({ bars, teams, teamArchive, settings, schedule }));
       flash("Setup saved to this browser. It'll be here next time you open this page here.");
     } catch (e) { flash("Couldn't save right now — try again in a moment."); }
   };
@@ -789,6 +957,26 @@ function ChalkLineScheduler({ storageKey }) {
             <div className="cl-section no-print" style={{ textAlign: "right", marginBottom: 12 }}>
               <button className="cl-btn cl-btn-ghost" onClick={() => window.print()}>Print / Save as PDF</button>
             </div>
+
+            <div className="cl-card no-print" style={{ marginBottom: 22 }}>
+              <div className="cl-section-title" style={{ marginBottom: 6 }}>Team dropped or added mid-season?</div>
+              <p style={{ fontSize: 13.5, color: "var(--ink-soft)", margin: "0 0 12px", lineHeight: 1.5 }}>
+                Add or remove the team above first, then enter the first week that hasn't been played/printed
+                yet. Every week before that stays exactly as it is now, and only the weeks from there on get
+                rebuilt for the new roster, still with no repeat matchups against the locked weeks.
+              </p>
+              <div className="cl-form-row">
+                <input
+                  type="number" min="1" max={schedule.weeks.length}
+                  className="cl-input cl-input-num"
+                  placeholder={`1–${schedule.weeks.length}`}
+                  value={amendWeek}
+                  onChange={(e) => setAmendWeek(e.target.value)}
+                />
+                <button className="cl-btn cl-btn-brass" onClick={amendSchedule}>Regenerate from this week</button>
+              </div>
+            </div>
+
             <div className="cl-section">
               <div className="cl-section-title">Schedule</div>
               {weeksGrouped.map((wk) => (
