@@ -472,23 +472,28 @@ function buildRoundRobinSchedule(teams, bars, settings) {
 // repeat a matchup, and naturally leaves some pairs unplayed if weeksCount
 // is fewer than the full round-robin length. Bye rotates fairly for the same
 // reason: each team sits out exactly one round across the full round-robin.
-function buildRandomSchedule(teams, bars, weeksCount) {
+// The per-week home/away pick (wantsHome, below) is a greedy heuristic with
+// no lookahead: it only knows each team's running total at the moment its
+// week is processed, and bar-capacity limits (many bars here have exactly
+// one table shared by two teams) can force a pick against that heuristic
+// anyway. Over a full season that drift can add up to a real gap for one
+// or two teams even though most land close to even. Rather than accept
+// whatever a single random shuffle produces, this runs several independent
+// shuffles and keeps the one where every team ends up closest to a 50/50
+// split, since the round order is the only randomness involved.
+function buildRandomScheduleAttempt(teams, bars, allRounds, targetWeeks) {
   const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
-  const allRounds = generateRoundRobinPairs(teams.map((t) => t.id));
   const shuffled = [...allRounds];
   for (let i = shuffled.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-  const sequence = shuffled.slice(0, Math.min(weeksCount, shuffled.length));
+  const sequence = shuffled.slice(0, targetWeeks);
 
   const teamState = {};
   teams.forEach((t) => (teamState[t.id] = { homeCount: 0, awayCount: 0, lastVenue: null }));
   const weeks = [];
   const issues = [];
-  if (weeksCount > allRounds.length) {
-    issues.push(`With ${teams.length} teams, only ${allRounds.length} weeks are possible without repeating a matchup — showing ${allRounds.length} weeks instead of ${weeksCount}.`);
-  }
 
   sequence.forEach((pairs, idx) => {
     const capacityLeft = {};
@@ -545,6 +550,94 @@ function buildRandomSchedule(teams, bars, weeksCount) {
   return { weeks, teamState, issues };
 }
 
+const homeAwayBalanceScore = (teamState) => {
+  let maxAbs = 0, sumSq = 0;
+  Object.values(teamState).forEach((s) => {
+    const diff = s.homeCount - s.awayCount;
+    maxAbs = Math.max(maxAbs, Math.abs(diff));
+    sumSq += diff * diff;
+  });
+  return { maxAbs, sumSq };
+};
+
+// Trying several round shuffles (above) only gets so far, since the
+// wantsHome heuristic behaves similarly regardless of processing order and
+// bar capacity can force its hand anyway. This directly targets whatever
+// imbalance is left: for any match where the home team is meaningfully more
+// home-heavy than the away team is away-heavy, swap who hosts — for free
+// when both teams share a bar (nothing about capacity changes), otherwise
+// only when the away team's bar actually has a free table that week. Each
+// swap strictly shrinks the gap between that pair, so this always
+// terminates rather than flip-flopping.
+function repairHomeAwayBalance(result, teams, bars, lockedBeforeRound = 0) {
+  const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
+  const barsById = Object.fromEntries(bars.map((b) => [b.id, b]));
+  const teamState = {};
+  Object.entries(result.teamState).forEach(([id, s]) => { teamState[id] = { ...s }; });
+  const weeks = result.weeks.map((w) => ({ ...w, matches: w.matches.map((m) => ({ ...m })), barUsage: { ...w.barUsage } }));
+
+  let improvedAny = true;
+  let guard = 0;
+  while (improvedAny && guard < 1000) {
+    improvedAny = false;
+    guard++;
+    for (const week of weeks) {
+      if (week.round < lockedBeforeRound) continue; // never touch already-printed weeks
+      for (const m of week.matches) {
+        const hostId = m.homeId, guestId = m.awayId;
+        const hs = teamState[hostId], gs = teamState[guestId];
+        const hostDiff = hs.homeCount - hs.awayCount;
+        const guestDiff = gs.homeCount - gs.awayCount;
+        if (hostDiff <= guestDiff + 1) continue;
+
+        const newHostId = guestId, newGuestId = hostId;
+        const newBarId = teamsById[newHostId].barId;
+        const oldBarId = m.barId;
+        if (!m.sharedBar) {
+          const cap = barsById[newBarId]?.tables ?? 0;
+          const used = week.barUsage[newBarId] ?? 0;
+          if (used >= cap) continue;
+        }
+
+        m.homeId = newHostId; m.awayId = newGuestId; m.barId = newBarId;
+        hs.homeCount -= 1; hs.awayCount += 1;
+        gs.homeCount += 1; gs.awayCount -= 1;
+        if (!m.sharedBar) {
+          week.barUsage[oldBarId] = (week.barUsage[oldBarId] ?? 0) - 1;
+          week.barUsage[newBarId] = (week.barUsage[newBarId] ?? 0) + 1;
+        }
+        improvedAny = true;
+      }
+    }
+  }
+
+  return { weeks, teamState, issues: result.issues };
+}
+
+function buildRandomSchedule(teams, bars, weeksCount) {
+  const allRounds = generateRoundRobinPairs(teams.map((t) => t.id));
+  const targetWeeks = Math.min(weeksCount, allRounds.length);
+  const rangeIssue = weeksCount > allRounds.length
+    ? [`With ${teams.length} teams, only ${allRounds.length} weeks are possible without repeating a matchup — showing ${allRounds.length} weeks instead of ${weeksCount}.`]
+    : [];
+
+  const ATTEMPTS = 150;
+  let best = null;
+  let bestScore = null;
+  for (let n = 0; n < ATTEMPTS; n++) {
+    const result = buildRandomScheduleAttempt(teams, bars, allRounds, targetWeeks);
+    const score = homeAwayBalanceScore(result.teamState);
+    if (!best || score.maxAbs < bestScore.maxAbs || (score.maxAbs === bestScore.maxAbs && score.sumSq < bestScore.sumSq)) {
+      best = result;
+      bestScore = score;
+    }
+    if (bestScore.maxAbs <= 1) break; // every team within one game of even — good enough
+  }
+
+  const repaired = repairHomeAwayBalance(best, teams, bars);
+  return { weeks: repaired.weeks, teamState: repaired.teamState, issues: [...rangeIssue, ...repaired.issues] };
+}
+
 // ---------- mid-season amendments (add/drop a team without touching
 // weeks already printed/played) ----------
 const pairKey = (a, b) => [a, b].sort().join("|");
@@ -593,8 +686,10 @@ function findNoRepeatWeek(teamIds, usedPairs, byeCounts, maxAttempts = 40) {
 // Keeps every week before fromWeekNumber exactly as-is, and rebuilds
 // fromWeekNumber onward using the current team/bar list, carrying forward
 // bye counts and home/away balance from the kept weeks so fairness continues
-// rather than resetting.
-function buildContinuationSchedule(existingWeeks, fromWeekNumber, teams, bars) {
+// rather than resetting. Same greedy-heuristic caveat as buildRandomSchedule
+// above, so buildContinuationSchedule below tries this multiple times and
+// keeps the fairest result.
+function buildContinuationAttempt(existingWeeks, fromWeekNumber, teams, bars) {
   const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
   const teamIds = teams.map((t) => t.id);
   const keptWeeks = existingWeeks.filter((w) => w.round < fromWeekNumber);
@@ -671,6 +766,22 @@ function buildContinuationSchedule(existingWeeks, fromWeekNumber, teams, bars) {
   }
 
   return { weeks, teamState, issues };
+}
+
+function buildContinuationSchedule(existingWeeks, fromWeekNumber, teams, bars) {
+  const ATTEMPTS = 150;
+  let best = null;
+  let bestScore = null;
+  for (let n = 0; n < ATTEMPTS; n++) {
+    const result = buildContinuationAttempt(existingWeeks, fromWeekNumber, teams, bars);
+    const score = homeAwayBalanceScore(result.teamState);
+    if (!best || score.maxAbs < bestScore.maxAbs || (score.maxAbs === bestScore.maxAbs && score.sumSq < bestScore.sumSq)) {
+      best = result;
+      bestScore = score;
+    }
+    if (bestScore.maxAbs <= 1) break;
+  }
+  return repairHomeAwayBalance(best, teams, bars, fromWeekNumber);
 }
 
 // ---------- Pueblo 8-Ball 26/27 season ----------
