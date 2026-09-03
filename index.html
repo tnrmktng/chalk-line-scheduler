@@ -801,7 +801,7 @@ function ChalkLineScheduler({ storageKey }) {
                         <div className="cl-match" key={i}>
                           <span className="cl-side"><span className="cl-team-name">{teamsById[m.homeId]?.name}</span><span className="cl-badge-home">HOME</span></span>
                           <span className="cl-vs">vs</span>
-                          <span className="cl-side"><span className="cl-team-name">{teamsById[m.awayId]?.name}</span><span className="cl-badge-away">AWAY</span></span>
+                          <span className="cl-side"><span className="cl-badge-away">AWAY</span><span className="cl-team-name">{teamsById[m.awayId]?.name}</span></span>
                           <span className="cl-venue">{barsById[m.barId]?.name}{m.sharedBar ? " (shared home)" : ""}</span>
                         </div>
                       ))}
