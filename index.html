@@ -422,57 +422,32 @@ function buildRoundRobinSchedule(teams, bars, settings) {
   return { weeks, teamState, issues };
 }
 
-// Not everyone plays everyone — each week randomly pairs teams instead of
-// rotating through a full round-robin. Still prefers pairings that haven't
-// happened yet (falls back to the least-repeated pair once most have), and
-// rotates the bye fairly so one team doesn't sit out more than others.
-function generateRandomPairs(teamIds, pairCount, byeCount) {
-  let pool = [...teamIds];
-  let byeId = null;
-  if (pool.length % 2 !== 0) {
-    const minBye = Math.min(...pool.map((id) => byeCount[id] ?? 0));
-    const candidates = pool.filter((id) => (byeCount[id] ?? 0) === minBye);
-    byeId = candidates[Math.floor(Math.random() * candidates.length)];
-    byeCount[byeId] = (byeCount[byeId] ?? 0) + 1;
-    pool = pool.filter((id) => id !== byeId);
-  }
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  const used = new Set();
-  const pairs = [];
-  for (let i = 0; i < pool.length; i++) {
-    const a = pool[i];
-    if (used.has(a)) continue;
-    used.add(a);
-    let best = null, bestScore = Infinity;
-    for (let j = 0; j < pool.length; j++) {
-      const b = pool[j];
-      if (b === a || used.has(b)) continue;
-      const score = pairCount[[a, b].sort().join("|")] || 0;
-      if (score < bestScore) { bestScore = score; best = b; }
-    }
-    if (best == null) continue;
-    used.add(best);
-    pairCount[[a, best].sort().join("|")] = (pairCount[[a, best].sort().join("|")] || 0) + 1;
-    pairs.push([a, best]);
-  }
-  return { pairs, byeId };
-}
-
+// "Random matchups" — not everyone plays everyone, but no pair should ever
+// repeat. A full round-robin (generateRoundRobinPairs) already guarantees
+// every pair meets exactly once across all of its rounds; taking a shuffled
+// subset of those rounds gives a random-feeling season that still can never
+// repeat a matchup, and naturally leaves some pairs unplayed if weeksCount
+// is fewer than the full round-robin length. Bye rotates fairly for the same
+// reason: each team sits out exactly one round across the full round-robin.
 function buildRandomSchedule(teams, bars, weeksCount) {
   const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
+  const allRounds = generateRoundRobinPairs(teams.map((t) => t.id));
+  const shuffled = [...allRounds];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  const sequence = shuffled.slice(0, Math.min(weeksCount, shuffled.length));
+
   const teamState = {};
   teams.forEach((t) => (teamState[t.id] = { homeCount: 0, awayCount: 0, lastVenue: null }));
-  const pairCount = {};
-  const byeCount = {};
-  teams.forEach((t) => (byeCount[t.id] = 0));
   const weeks = [];
   const issues = [];
+  if (weeksCount > allRounds.length) {
+    issues.push(`With ${teams.length} teams, only ${allRounds.length} weeks are possible without repeating a matchup — showing ${allRounds.length} weeks instead of ${weeksCount}.`);
+  }
 
-  for (let w = 0; w < weeksCount; w++) {
-    const { pairs, byeId } = generateRandomPairs(teams.map((t) => t.id), pairCount, byeCount);
+  sequence.forEach((pairs, idx) => {
     const capacityLeft = {};
     bars.forEach((b) => (capacityLeft[b.id] = b.tables));
 
@@ -495,7 +470,7 @@ function buildRandomSchedule(teams, bars, weeksCount) {
     });
 
     const assigned = backtrackAssign(free, teamsById, capacityLeft, teamState);
-    if (!assigned.ok) issues.push(`Week ${w + 1}: table limits were tight — one match may need a manual swap.`);
+    if (!assigned.ok) issues.push(`Week ${idx + 1}: table limits were tight — one match may need a manual swap.`);
 
     const allMatches = [...decided, ...assigned.matches];
     const barUsage = {};
@@ -509,16 +484,20 @@ function buildRandomSchedule(teams, bars, weeksCount) {
       teamState[guestId].awayCount += 1; teamState[guestId].lastVenue = "away";
     });
 
+    const involved = new Set();
+    pairs.forEach(([a, b]) => { involved.add(a); involved.add(b); });
+    const byeTeam = teams.find((t) => !involved.has(t.id));
+
     weeks.push({
-      round: w + 1, leg: 1,
+      round: idx + 1, leg: 1,
       matches: allMatches.map((m) => ({
         homeId: m.hostId, awayId: m.a === m.hostId ? m.b : m.a,
         barId: teamsById[m.hostId].barId, sharedBar: !!m.sharedBar,
       })),
-      byeId,
+      byeId: byeTeam ? byeTeam.id : null,
       barUsage,
     });
-  }
+  });
 
   return { weeks, teamState, issues };
 }
