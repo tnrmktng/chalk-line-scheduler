@@ -31,6 +31,28 @@
   Onboarding a new league from here on is just steps 1-2 above (two gist
   edits) — no code change or redeploy needed.
 
+  PUBLISHING A SCHEDULE so it's the same for everyone who opens the link
+  (this is what makes a printed PDF match what people see on the page):
+
+  1. In the app, generate the final schedule, then click "Copy schedule for
+     handoff". That copies the full schedule as JSON to the clipboard.
+
+  2. Create (or edit) a PUBLIC gist for that league, e.g.
+     "chalk-line-schedule-<league>.json", and paste that JSON in as its
+     content. Copy its "Raw" URL (the no-revision-hash form, so future edits
+     to this same gist are picked up automatically — see the existing
+     CONFIG_URL/LEAGUES_URL above for the URL shape to match).
+
+  3. Add that league to the SCHEDULES_URL directory gist below (same
+     slug -> raw URL mapping style as LEAGUES_URL).
+
+  From then on, that league's link always opens straight to that exact
+  schedule — no "Generate schedule" click, no risk of a different random
+  draw on someone else's device. To change the schedule later (a team drops
+  or is added mid-season), regenerate/amend in the app, "Copy schedule for
+  handoff" again, and paste the new JSON over the gist's old content —
+  no redeploy of this file needed, just that one gist edit.
+
   Heads up: this is a light front-door, not a security system. Someone who
   opens their browser's dev tools could find the config URLs and codes. It's
   meant to keep casual link-sharing under control during testing/trials, not
@@ -41,6 +63,11 @@
 <script>
   window.CONFIG_URL = "https://gist.githubusercontent.com/tnrmktng/aeb9d09be2f1c3cd30a36b2cebb90518/raw/chalk-line-access.json";
   window.LEAGUES_URL = "https://gist.githubusercontent.com/tnrmktng/819b4978f9a682a1624d585e4ec82d7f/raw/chalk-line-leagues.json";
+  // Optional: a directory gist mapping league slug -> that league's published
+  // schedule gist (raw URL). When a league has an entry here, everyone who
+  // opens that league's link sees the exact same locked-in schedule, no
+  // "Generate schedule" click needed, so it always matches what got printed.
+  window.SCHEDULES_URL = "https://gist.githubusercontent.com/tnrmktng/c9c37f57ca82b129d018eee834e3ec5e/raw/chalk-line-schedules.json";
 </script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
@@ -699,7 +726,7 @@ const seedTeams = [
 ];
 
 // ---------- main scheduler app ----------
-function ChalkLineScheduler({ storageKey }) {
+function ChalkLineScheduler({ storageKey, leagueSlug }) {
   const [bars, setBars] = useState(seedBars);
   const [teams, setTeams] = useState(seedTeams);
   const [settings, setSettings] = useState({
@@ -718,6 +745,7 @@ function ChalkLineScheduler({ storageKey }) {
   const [blackoutInput, setBlackoutInput] = useState("");
   const [amendWeek, setAmendWeek] = useState("");
   const [teamArchive, setTeamArchive] = useState(() => Object.fromEntries(seedTeams.map((t) => [t.id, t])));
+  const [published, setPublished] = useState(null); // null = not checked yet / none for this league
 
   useEffect(() => {
     try {
@@ -737,6 +765,35 @@ function ChalkLineScheduler({ storageKey }) {
       }
     } catch (e) { /* no saved config yet */ }
   }, [storageKey]);
+
+  // If this league has a published schedule (see window.SCHEDULES_URL in the
+  // setup comment at the top of the file), it's the shared source of truth:
+  // it loads last, after any local draft above, so everyone who opens this
+  // league's link (owner or operator, any device, no saved local state)
+  // lands on the exact same schedule that was printed, no button click
+  // needed. Use "Copy schedule for handoff" below to grab the JSON for a
+  // new publish whenever the schedule changes.
+  useEffect(() => {
+    const configured = window.SCHEDULES_URL && !window.SCHEDULES_URL.includes("PASTE_YOUR");
+    if (!configured) return;
+    const slug = leagueSlug || "default";
+    noCacheFetch(window.SCHEDULES_URL)
+      .then((directory) => {
+        const scheduleUrl = directory[slug];
+        if (!scheduleUrl) return null;
+        return noCacheFetch(scheduleUrl);
+      })
+      .then((data) => {
+        if (!data) return;
+        if (data.bars) setBars(data.bars);
+        if (data.teams) setTeams(data.teams);
+        if (data.teamArchive) setTeamArchive(data.teamArchive);
+        if (data.settings) setSettings((prev) => ({ ...prev, ...data.settings, format: "random" }));
+        if (data.schedule) setSchedule(data.schedule);
+        setPublished({ publishedAt: data.publishedAt || null });
+      })
+      .catch(() => { /* no published schedule for this league, or fetch failed — local/default stands */ });
+  }, [leagueSlug]);
 
   // Removing a team from the roster (drop mid-season) must not erase its name
   // from weeks that were already generated and printed against it, so every
@@ -818,6 +875,18 @@ function ChalkLineScheduler({ storageKey }) {
       localStorage.setItem(storageKey, JSON.stringify({ bars, teams, teamArchive, settings, schedule }));
       flash("Setup saved to this browser. It'll be here next time you open this page here.");
     } catch (e) { flash("Couldn't save right now — try again in a moment."); }
+  };
+
+  const copyForHandoff = async () => {
+    if (!schedule || schedule.error) { flash("Generate a schedule first."); return; }
+    const payload = JSON.stringify({ bars, teams, teamArchive, settings, schedule, publishedAt: new Date().toISOString() }, null, 2);
+    try {
+      await navigator.clipboard.writeText(payload);
+      flash("Copied. Send this to whoever publishes it, so every device shows this exact schedule.");
+    } catch (e) {
+      flash("Couldn't copy automatically. Open the browser console and copy chalkLineHandoffData instead.");
+      window.chalkLineHandoffData = payload;
+    }
   };
 
   const weeksGrouped = useMemo(() => {
@@ -946,7 +1015,15 @@ function ChalkLineScheduler({ storageKey }) {
           <button className="cl-btn cl-btn-brass" onClick={() => runGenerate()}>Generate schedule</button>
           <button className="cl-btn cl-btn-ghost" onClick={shuffleAndGenerate}>Shuffle order &amp; regenerate</button>
           <button className="cl-btn cl-btn-ghost" onClick={saveConfig}>Save setup</button>
+          <button className="cl-btn cl-btn-ghost" onClick={copyForHandoff}>Copy schedule for handoff</button>
         </div>
+
+        {published && (
+          <div className="cl-notice no-print">
+            This is the published schedule for this league. Anyone who opens this link sees exactly what's
+            shown here, so it's safe to print straight from this page.
+          </div>
+        )}
 
         {schedule?.issues?.length > 0 && (
           <div className="cl-issues">{schedule.issues.join(" ")}</div>
@@ -1149,7 +1226,7 @@ function AccessGate() {
           comment near the top of this file to lock it down with a code you control.
         </div>
       )}
-      <ChalkLineScheduler storageKey={storageKey} />
+      <ChalkLineScheduler storageKey={storageKey} leagueSlug={leagueSlug} />
     </div>
   );
 }
